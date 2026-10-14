@@ -31,7 +31,6 @@ func _ready() -> void:
 	for cy in range(WY0 / CH - 1, WY1 / CH + 1):
 		for cx in range(WX0 / CH - 1, WX1 / CH + 1):
 			_build_chunk(Vector2i(cx, cy))
-	RenderingServer.set_default_clear_color(Color("5b7fa8"))
 
 ## Surface height at x: flat yard, then a hill climbing to the right with a couple of shoulders.
 static func ground_y(x: float) -> float:

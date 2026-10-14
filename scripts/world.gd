@@ -33,6 +33,7 @@ func _ready() -> void:
 	add_child(terrain)
 	move_child(terrain, 0)
 	hazards = Hazards.new(self)
+	var bd := Backdrop.new(); add_child(bd); move_child(bd, 0)
 	for i in 2: hire(Worker.Role.MINER)
 	Game.toast.connect(func(t): hud.show_toast(t))
 	if OS.get_cmdline_user_args().has("--smoke"):
@@ -440,9 +441,7 @@ func _draw_portal(sg: Segment) -> void:
 	# timber portal set and the mine sign
 	draw_rect(Rect2(x - 7.0, gy - 26.0, 14.0, 28.0), Color("6b4a2c"))
 	draw_rect(Rect2(x - 5.0, gy - 23.0, 10.0, 25.0), Color("0d0a08"))
-	draw_rect(Rect2(x + o * 10.0 - 12.0, gy - 40.0, 24.0, 9.0), Color("2b2a2e"))
-	draw_rect(Rect2(x + o * 10.0 - 12.0, gy - 40.0, 2.0, 9.0), Color("f2b705"))
-	draw_string(ThemeDB.fallback_font, Vector2(x + o * 10.0 - 8.0, gy - 33.0), "MINE No.%d" % (segs.filter(func(s): return s.parent < 0 and s.id <= sg.id).size()), HORIZONTAL_ALIGNMENT_LEFT, -1, 6, Color("f1efe6"))
+	_sign(Vector2(x + o * 10.0, gy - 36.0), "MINE No.%d" % mine_no(sg))
 
 func _draw_gantry(sg: Segment) -> void:
 	# the overland conveyor from the portal down to the head tower above the stockpile
@@ -458,26 +457,64 @@ func _draw_gantry(sg: Segment) -> void:
 		k += 60.0
 
 func _draw_yard() -> void:
-	# head tower, the coal stockpile and the scale house at the road out
-	draw_rect(Rect2(HEAD_X - 8.0, -118.0, 16.0, 118.0), Color("3a3d44"))
-	draw_line(Vector2(HEAD_X, -118.0), Vector2(PILE_X, -118.0 + 40.0), Color("1d1c20"), 3.0)
-	draw_line(Vector2(PILE_X, -78.0), Vector2(PILE_X, -8.0), Color("4a4f55"), 2.0)
+	# head tower: a braced steel frame with the drive house on top
+	var hx := HEAD_X
+	draw_rect(Rect2(hx - 9.0, -118.0, 18.0, 118.0), Color("2f3238"))
+	for k in 9:
+		var y := -110.0 + k * 13.0
+		draw_line(Vector2(hx - 9.0, y), Vector2(hx + 9.0, y + 13.0), Color("4a4f55"), 1.0)
+		draw_line(Vector2(hx + 9.0, y), Vector2(hx - 9.0, y + 13.0), Color("4a4f55"), 1.0)
+	draw_rect(Rect2(hx - 14.0, -132.0, 28.0, 14.0), Color("8a8f96"))
+	draw_rect(Rect2(hx - 14.0, -134.0, 28.0, 2.5), Color("1d1c20"))
+	draw_circle(Vector2(hx - 6.0, -118.0), 4.5, Color("1d1c20"))
+	# stacker belt out over the stockpile and the surge bin under the head
+	draw_rect(Rect2(hx - 16.0, -104.0, 20.0, 16.0), Color("3f454c"))
+	draw_line(Vector2(hx - 6.0, -116.0), Vector2(PILE_X + 40.0, -72.0), Color("1d1c20"), 3.5)
+	draw_line(Vector2(hx - 6.0, -119.5), Vector2(PILE_X + 40.0, -75.5), Color("6a6f78"), 1.0)
+	for k in 6:
+		var px := PILE_X + 40.0 + k * ((hx - 6.0) - (PILE_X + 40.0)) / 6.0
+		var py := -72.0 + k * (-116.0 + 72.0) / 6.0
+		draw_line(Vector2(px, py), Vector2(px, 0.0), Color("3a3d44"), 1.5)
 	var r := minf(70.0, 10.0 + sqrt(maxf(0.0, Game.pile)) * 5.0)
-	draw_colored_polygon(PackedVector2Array([Vector2(PILE_X - r, 0), Vector2(PILE_X, -r * 0.62), Vector2(PILE_X + r, 0)]), Color("1d1c20"))
+	draw_colored_polygon(PackedVector2Array([Vector2(PILE_X - r, 0), Vector2(PILE_X - r * 0.3, -r * 0.62), Vector2(PILE_X + r * 0.2, -r * 0.6), Vector2(PILE_X + r, 0)]), Color("1d1c20"))
+	draw_colored_polygon(PackedVector2Array([Vector2(PILE_X - r * 0.6, 0), Vector2(PILE_X - r * 0.25, -r * 0.5), Vector2(PILE_X, 0)]), Color("2a292e"))
 	var ox := PILE_X + 110.0
 	for m in Game.piles.keys():
 		var t: float = Game.piles[m]
 		var rr := minf(30.0, 3.0 + sqrt(t) * 5.0)
 		draw_colored_polygon(PackedVector2Array([Vector2(ox - rr, 0), Vector2(ox, -rr * 0.6), Vector2(ox + rr, 0)]), Mats.COLORS[m])
 		ox += 70.0
-	draw_rect(Rect2(-60.0, -24.0, 40.0, 24.0), Color("8c6640"))
-	draw_string(ThemeDB.fallback_font, Vector2(-58.0, -27.0), "SCALE HOUSE", HORIZONTAL_ALIGNMENT_LEFT, -1, 6, Color("f1efe6"))
-	# crew quarters
-	draw_rect(Rect2(Worker.BUNK_X - 30.0, -22.0, 60.0, 22.0), Color("cfc9bd"))
-	draw_rect(Rect2(Worker.BUNK_X - 33.0, -26.0, 66.0, 5.0), Color("5a4028"))
-	draw_string(ThemeDB.fallback_font, Vector2(Worker.BUNK_X - 28.0, -29.0), "CREW QUARTERS", HORIZONTAL_ALIGNMENT_LEFT, -1, 6, Color("f1efe6"))
-	# the road
+	# scale house and the weighbridge
+	draw_rect(Rect2(-64.0, -1.5, 90.0, 3.0), Color("6a6f78"))
+	draw_rect(Rect2(-60.0, -26.0, 36.0, 26.0), Color("8c6640"))
+	draw_rect(Rect2(-63.0, -30.0, 42.0, 5.0), Color("4a3a2a"))
+	draw_rect(Rect2(-52.0, -20.0, 8.0, 8.0), Color("f2d36b"))
+	draw_rect(Rect2(-36.0, -20.0, 8.0, 8.0), Color("f2d36b"))
+	_sign(Vector2(-42.0, -36.0), "SCALE HOUSE")
+	# crew quarters: a long bunkhouse with a porch and windows
+	var bx := Worker.BUNK_X
+	draw_rect(Rect2(bx - 36.0, -24.0, 72.0, 24.0), Color("cfc9bd"))
+	draw_rect(Rect2(bx - 39.0, -29.0, 78.0, 6.0), Color("5a4028"))
+	for k in 4: draw_rect(Rect2(bx - 30.0 + k * 18.0, -18.0, 7.0, 7.0), Color("7fa6c9"))
+	draw_rect(Rect2(bx + 16.0, -14.0, 9.0, 14.0), Color("4a3a2a"))
+	draw_rect(Rect2(bx - 40.0, -1.0, 80.0, 1.5), Color("8c8c8c"))
+	_sign(Vector2(bx, -36.0), "CREW QUARTERS")
+	# the manager's office trailer
+	draw_rect(Rect2(Worker.OFFICE_X - 22.0, -18.0, 44.0, 18.0), Color("e8e4d8"))
+	draw_rect(Rect2(Worker.OFFICE_X - 24.0, -21.0, 48.0, 3.0), Color("4a4a55"))
+	draw_rect(Rect2(Worker.OFFICE_X - 14.0, -14.0, 8.0, 7.0), Color("7fa6c9"))
+	_sign(Vector2(Worker.OFFICE_X, -28.0), "OFFICE")
+	# the haul road out to the highway
 	draw_line(Vector2(-700.0, 1.5), Vector2(Terrain.HILL, 1.5), Color("4a3f36"), 3.0)
+	var dx := -680.0
+	while dx < Terrain.HILL:
+		draw_line(Vector2(dx, 1.5), Vector2(dx + 14.0, 1.5), Color("c9b86a"), 0.8); dx += 40.0
+
+func _sign(at: Vector2, text: String) -> void:
+	var w := text.length() * 4.2 + 8.0
+	draw_rect(Rect2(at.x - w * 0.5, at.y - 6.0, w, 9.0), Color("2b2a2e"))
+	draw_rect(Rect2(at.x - w * 0.5, at.y - 6.0, 2.0, 9.0), Color("f2b705"))
+	draw_string(ThemeDB.fallback_font, Vector2(at.x - w * 0.5 + 4.0, at.y + 1.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 6, Color("f1efe6"))
 
 func _draw_truck(t: Dictionary) -> void:
 	var x: float = t.x

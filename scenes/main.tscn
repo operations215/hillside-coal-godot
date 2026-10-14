@@ -1,0 +1,73 @@
+[gd_scene load_steps=4 format=3 uid="uid://hillside_main"]
+
+[ext_resource type="Script" path="res://scripts/world.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/camera.gd" id="2"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="3"]
+
+[node name="World" type="Node2D"]
+script = ExtResource("1")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+script = ExtResource("2")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+script = ExtResource("3")
+
+[node name="Top" type="HBoxContainer" parent="HUD"]
+offset_left = 12.0
+offset_top = 10.0
+offset_right = 1388.0
+offset_bottom = 40.0
+theme_override_constants/separation = 24
+
+[node name="Cash" type="Label" parent="HUD/Top"]
+layout_mode = 2
+text = "CASH"
+
+[node name="Pile" type="Label" parent="HUD/Top"]
+layout_mode = 2
+text = "STOCKPILE"
+
+[node name="Price" type="Label" parent="HUD/Top"]
+layout_mode = 2
+text = "COAL"
+
+[node name="Day" type="Label" parent="HUD/Top"]
+layout_mode = 2
+text = "DAY 1"
+
+[node name="Crew" type="Label" parent="HUD/Top"]
+layout_mode = 2
+text = "CREW"
+
+[node name="Hire" type="Button" parent="HUD/Top"]
+layout_mode = 2
+text = "Hire miner ($45)"
+
+[node name="Pause" type="Button" parent="HUD/Top"]
+layout_mode = 2
+text = "❚❚"
+
+[node name="Sp1" type="Button" parent="HUD/Top"]
+layout_mode = 2
+text = "1×"
+
+[node name="Sp2" type="Button" parent="HUD/Top"]
+layout_mode = 2
+text = "2×"
+
+[node name="Sp3" type="Button" parent="HUD/Top"]
+layout_mode = 2
+text = "3×"
+
+[node name="Toasts" type="VBoxContainer" parent="HUD"]
+offset_left = 12.0
+offset_top = 50.0
+offset_right = 450.0
+offset_bottom = 300.0
+
+[connection signal="pressed" from="HUD/Top/Hire" to="HUD" method="_on_hire"]
+[connection signal="pressed" from="HUD/Top/Pause" to="HUD" method="_on_speed" binds= [0]]
+[connection signal="pressed" from="HUD/Top/Sp1" to="HUD" method="_on_speed" binds= [1]]
+[connection signal="pressed" from="HUD/Top/Sp2" to="HUD" method="_on_speed" binds= [2]]
+[connection signal="pressed" from="HUD/Top/Sp3" to="HUD" method="_on_speed" binds= [3]]

@@ -24,7 +24,8 @@ func tick(dt: float) -> void:
 		if rain > 0.0 and was == 0.0: Game.toast.emit("Rain is starting. Keep an eye on the water in shallow tunnels.")
 	for sg in world.segs:
 		if sg.dead or sg.prog < 4.0: continue
-		if not sg.is_shaft(): _roof(sg, dt)              # a timbered shaft does not fall in like a roof
+		if world.mine_closed(sg): _abandoned(sg, dt)
+		elif not sg.is_shaft(): _roof(sg, dt)            # a timbered shaft does not fall in like a roof
 		_water(sg, dt)
 	_gas(dt)
 
@@ -40,6 +41,16 @@ func _roof(sg: Segment, dt: float) -> void:
 	if sg.rubble.size() > 0: sg.stress = minf(sg.stress, 0.95)
 	if sg.stress >= 1.0:
 		cave_in(sg, sg.sup + randf() * U, 10.0 + randf() * 14.0)
+
+## Nobody is watching an abandoned mine: the timber rots, the bolts rust, and sooner or later sections fall in.
+func _abandoned(sg: Segment, dt: float) -> void:
+	if sg.rubble.size() > 0 or sg.prog < 12.0: return
+	sg.stress += dt * 0.004 * (1.0 + sg.water)
+	if sg.stress >= 1.0 and randf() < dt * 0.3:
+		var a: float = randf() * maxf(2.0, sg.prog - 14.0); var L: float = 8.0 + randf() * 12.0
+		sg.rubble = [clampf(a, 2.0, sg.prog - 2.0), minf(sg.prog, a + L)]; sg.stress = 0.0; sg.sup = minf(sg.sup, a)
+		world.shake = 0.4
+		Game.toast.emit("The roof fell in a section of abandoned mine No.%d." % world.mine_no(sg))
 
 func cave_in(sg: Segment, s0: float, L: float) -> void:
 	var a := clampf(s0, 2.0, sg.prog - 2.0); var b := minf(sg.prog, a + L)

@@ -52,6 +52,11 @@ func tick(dt: float) -> void:
 		toast.emit("Day %d: sold $%s, profit $%s%s" % [day - 1, _money(day_earn), ("-" if profit < 0 else ""), _money(absf(profit))])
 		day_earn = 0.0; day_money = money
 
+## 0 by day, 1 in the dead of night: the last quarter of each shift runs into the dark and the next dawns.
+func night_f() -> float:
+	var g := fmod(fmod(time, DAY_LEN) / DAY_LEN + 0.12, 1.0)
+	return smoothstep(0.70, 0.84, g) * (1.0 - smoothstep(0.96, 1.0, g))
+
 func pay(amount: float) -> void:
 	money += amount
 	if amount > 0.0:

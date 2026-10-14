@@ -26,6 +26,7 @@ var s := 0.0
 var face_dir := 1.0
 var task := -1                    # segment being worked, -2 heading home
 var clearing := false             # a miner digging out rubble rather than coal
+var salvaging := false            # a miner pulling a dead conveyor out of a closed mine
 var path: Array = []
 var think := 0.0
 var anim := 0.0
@@ -44,7 +45,7 @@ func status() -> String:
 		State.REST: return "Resting in the crew quarters"
 		State.WALK: return "Walking home" if task == -2 else "Walking to work"
 		State.DIG: return "Digging out a cave-in" if clearing else "At the face"
-		State.WORK: return ["", "Bolting the roof", "Checking the air", "Planning"][role]
+		State.WORK: return "Pulling out the conveyor" if salvaging else ["", "Bolting the roof", "Checking the air", "Planning"][role]
 	return "Waiting for work"
 
 func tick(dt: float) -> void:
@@ -62,7 +63,8 @@ func tick(dt: float) -> void:
 			think = 0.5
 			if energy < 15.0: _go_home(); return
 			match role:
-				Role.MINER: _find_face()
+				Role.MINER:
+					if not _find_salvage(): _find_face()
 				Role.BOLTER: _find_bolting()
 				Role.SAFETY: _find_round()
 				Role.MANAGER:
@@ -71,7 +73,7 @@ func tick(dt: float) -> void:
 
 func leave_and_idle() -> void:
 	_park_rig()
-	world.leave_face(self); state = State.IDLE; think = 0.0; clearing = false; path = []
+	world.leave_face(self); state = State.IDLE; think = 0.0; clearing = false; salvaging = false; path = []
 
 func _go_home() -> void:
 	_park_rig()
@@ -98,10 +100,22 @@ func _find_face() -> void:
 	path = world.build_path(self, best.id, at)
 	state = State.WALK
 
+func _find_salvage() -> bool:
+	for root in world.segs:
+		if root.dead or root.parent >= 0 or not root.salvage: continue
+		if world.workers.any(func(o): return o != self and o.salvaging and o.task >= 0 and world.mine_root(world.segs[o.task]).id == root.id): continue
+		var sg: Segment = world.salvage_target(root)
+		if sg == null: root.salvage = false; continue
+		task = sg.id; salvaging = true
+		path = world.build_path(self, sg.id, maxf(0.0, sg.belt - 2.0))
+		state = State.WALK
+		return true
+	return false
+
 func _find_bolting() -> void:
 	var best: Segment = null; var bs := 0.0
 	for sg in world.segs:
-		if sg.dead or sg.rubble.size() > 0 or world.hazards.flooded(sg): continue
+		if sg.dead or sg.rubble.size() > 0 or world.hazards.flooded(sg) or world.mine_closed(sg): continue
 		var U: float = sg.prog - sg.sup
 		if U < 10.0: continue
 		if world.workers.any(func(o): return o != self and o.role == Role.BOLTER and o.task == sg.id): continue
@@ -113,7 +127,7 @@ func _find_bolting() -> void:
 	state = State.WALK
 
 func _find_round() -> void:
-	var live: Array = world.segs.filter(func(sg): return not sg.dead and sg.prog > 20.0 and sg.rubble.is_empty())
+	var live: Array = world.segs.filter(func(sg): return not sg.dead and sg.prog > 20.0 and sg.rubble.is_empty() and not world.mine_closed(sg))
 	if live.is_empty() or randf() < 0.4: return
 	var sg: Segment = live[randi() % live.size()]
 	task = sg.id
@@ -140,7 +154,7 @@ func _walk(dt: float) -> void:
 		elif task >= 0 and world.seg_alive(task):
 			var sg: Segment = world.segs[task]
 			face_dir = 1.0 if sg.u.x >= 0 else -1.0
-			if role == Role.MINER: state = State.DIG
+			if role == Role.MINER and not salvaging: state = State.DIG
 			else: state = State.WORK; work_t = 6.0 + randf() * 6.0
 		else:
 			state = State.IDLE; task = -1
@@ -214,6 +228,8 @@ func _blast_cycle(sg: Segment, dt: float, hard: float) -> void:
 
 func _work(dt: float) -> void:
 	work_t -= dt
+	if salvaging:
+		_salvage(dt); return
 	match role:
 		Role.BOLTER:
 			if not world.seg_alive(task): leave_and_idle(); return
@@ -231,6 +247,23 @@ func _work(dt: float) -> void:
 				work_t = 8.0
 				world.auto_plan()
 	if energy < 10.0: _go_home()
+
+func _salvage(dt: float) -> void:
+	if not world.seg_alive(task): leave_and_idle(); return
+	var sg: Segment = world.segs[task]
+	var root: Segment = world.mine_root(sg)
+	var ds: float = minf(sg.belt, dt * 2.5 * skill)
+	sg.belt -= ds; Game.pay(-0.6 * ds)
+	position = position.lerp(sg.floor_pos(maxf(0.0, sg.belt - 2.0)), minf(1.0, dt * 4.0)); seg = sg.id; s = sg.belt
+	if randf() < dt * 2.0: world.fx.puff(position + Vector2(0, -3.0), Vector2(randf_range(-8, 8), randf_range(-12, -4)), 0.5, 0.8, Color(0.5, 0.45, 0.4, 0.6))
+	energy -= dt * 0.6
+	if sg.belt <= 0.0:
+		sg.belt = 0.0
+		if world.salvage_target(root) == null:
+			root.salvage = false
+			Game.toast.emit("The conveyor is out of mine No.%d." % world.mine_no(root))
+		leave_and_idle()
+	elif energy < 10.0: _go_home()
 
 func _draw() -> void:
 	if rig >= 0 and state == State.DIG: return

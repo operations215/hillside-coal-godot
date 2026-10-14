@@ -41,8 +41,35 @@ func _on_buy(key: String) -> void:
 	Game.buy(key)
 	_refresh_panel()
 
+var view: OptionButton
+var legend: Label
+var _arm := -1                     # mine id whose Decommission link was tapped once
+
 func _ready() -> void:
 	_refresh_panel()
+	view = OptionButton.new()
+	for f in World.FILTERS: view.add_item(f)
+	view.item_selected.connect(func(i): get_parent().view_filter = i; legend.visible = i > 0; legend.text = ["", "Green: methane. Above 1.5% nobody works the face, 5% can explode.", "Orange: a face with gas, cut coal or a machine running is where a fire starts.", "Red: unsupported roof under strain, or already down.", "Blue: standing water, flooded past 75%.", "Cyan: a long way from the fan; air is thin at the far end."][i])
+	$Top.add_child(view)
+	legend = Label.new(); legend.visible = false; legend.position = Vector2(12, 300); legend.add_theme_color_override("font_color", Color("f1efe6"))
+	add_child(legend)
+	$Info.meta_clicked.connect(_on_meta)
+
+func _on_meta(meta: Variant) -> void:
+	var world: World = get_parent()
+	var parts: PackedStringArray = str(meta).split(":")
+	var id := int(parts[1])
+	match parts[0]:
+		"find":
+			var sg: Segment = world.segs[id]
+			world.cam.position = sg.pos(minf(sg.prog, 40.0)); world.cam.zoom = Vector2(2.0, 2.0)
+		"findw":
+			world.cam.position = world.workers[id].position; world.cam.zoom = Vector2(2.5, 2.5)
+		"decom":
+			if _arm == id: world.decommission(world.segs[id]); _arm = -1
+			else: _arm = id
+		"salv": world.salvage(world.segs[id])
+	_refresh_info()
 
 func _refresh_panel() -> void:
 	for key in ["roof", "pump", "vent"]:
@@ -73,7 +100,12 @@ func _refresh_info() -> void:
 			worst = maxf(worst, c.stress); wet = maxf(wet, c.water); rub = rub or c.rubble.size() > 0
 			if not c.done(): faces += 1
 		var g: float = world.hazards.gas_of(sg)
-		lines.append("[b]%s No.%d[/b]  CH4 %s%.1f%%[/color]  water %s%d%%[/color]  roof %s%s[/color]  faces %d" % [
+		var act := ""
+		if sg.decom:
+			act = "[color=#ff8a73]closed[/color]" + ("  salvaging" if sg.salvage else ("" if world.salvage_target(sg) == null else "  [url=salv:%d]salvage belt[/url]" % sg.id))
+		else:
+			act = "[url=decom:%d]%s[/url]" % [sg.id, "tap again to close" if _arm == sg.id else "close"]
+		lines.append(("[b]%s No.%d[/b]  CH4 %s%.1f%%[/color]  water %s%d%%[/color]  roof %s%s[/color]  faces %d  [url=find:" + str(sg.id) + "]find[/url]  " + act) % [
 			"Shaft" if sg.is_shaft() else "Mine", n,
 			"[color=#ff8a73]" if g >= 1.5 else ("[color=#f2b705]" if g >= 0.8 else "[color=#9be07a]"), g,
 			"[color=#ff8a73]" if wet > 0.75 else ("[color=#f2b705]" if wet > 0.3 else "[color=#9be07a]"), int(wet * 100),
@@ -81,7 +113,7 @@ func _refresh_info() -> void:
 	if lines.is_empty(): lines.append("No mines open yet. Drag from the hillside into the ground.")
 	lines.append("")
 	for w in world.workers:
-		lines.append("%s  [color=#9a948a]%s · %s · %d%%[/color]" % [w.worker_name, Worker.ROLE_NAME[w.role], w.status(), int(w.energy)])
+		lines.append("%s  [color=#9a948a]%s · %s · %d%%[/color]  [url=findw:%d]find[/url]" % [w.worker_name, Worker.ROLE_NAME[w.role], w.status(), int(w.energy), w.id])
 	$Info.text = "\n".join(lines)
 
 func show_toast(text: String) -> void:

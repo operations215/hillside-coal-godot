@@ -23,7 +23,10 @@ var hazards: Hazards
 var fx := FX.new()
 var rigs: Array = []
 var cars: Array = []
-var plan_belt := true             # new tunnels get a conveyor, or go bare for shuttle cars
+var plan_belt := true
+var view_filter := 0              # 0 normal, 1 gas, 2 fire, 3 roof, 4 water, 5 air
+const FILTERS := ["Normal view", "Methane", "Fire risk", "Roof", "Water", "Air supply"]
+var night: Night             # new tunnels get a conveyor, or go bare for shuttle cars
 var shake := 0.0
 var plan_wait := 0.0
 
@@ -36,6 +39,7 @@ func _ready() -> void:
 	move_child(terrain, 0)
 	hazards = Hazards.new(self)
 	var bd := Backdrop.new(); add_child(bd); move_child(bd, 0)
+	night = Night.new(); night.world = self; add_child(night)
 	for i in 2: hire(Worker.Role.MINER)
 	Game.toast.connect(func(t): hud.show_toast(t))
 	if OS.get_cmdline_user_args().has("--smoke"):
@@ -78,6 +82,44 @@ func shoot(sg: Segment) -> void:
 	if hazards.gas_of(sg) > 2.5 and randf() < 0.35:
 		hazards._explode(segs[sg.root_of(segs)], hazards.gas_of(sg))
 
+func mine_root(sg: Segment) -> Segment:
+	return segs[sg.root_of(segs)]
+
+func mine_closed(sg: Segment) -> bool:
+	return mine_root(sg).decom
+
+## Close a mine: the crews walk out, the belts stop with whatever is on them, and the roof is left to itself.
+func decommission(root: Segment) -> void:
+	if root.decom: return
+	root.decom = true
+	for w in workers:
+		if w.task >= 0 and seg_alive(w.task) and mine_root(segs[w.task]).id == root.id: w.leave_and_idle()
+	for c in cars:
+		if c.task >= 0 and mine_root(segs[c.task]).id == root.id: c.state = "idle"; c.task = -1; c.cargo = []
+	Game.toast.emit("Mine No.%d is decommissioned. The conveyor sits idle in there; salvage it or leave it to the roof." % mine_no(root))
+
+func salvage(root: Segment) -> void:
+	if not root.decom or root.salvage: return
+	root.salvage = true
+	Game.toast.emit("A miner will pull the conveyor out of mine No.%d at $0.60 a foot." % mine_no(root))
+
+## A segment in a closed mine still holding belt to salvage, nearest the portal first.
+func salvage_target(root: Segment) -> Segment:
+	var best: Segment = null
+	for sg in segs:
+		if sg.dead or mine_root(sg).id != root.id or not sg.has_belt or sg.belt < 0.5: continue
+		if best == null or sg.id < best.id: best = sg
+	return best
+
+func filter_value(sg: Segment) -> float:
+	match view_filter:
+		1: return clampf(hazards.gas_of(sg) / 5.0, 0.0, 1.0)
+		2: return clampf(hazards.gas_of(sg) / 3.5 + (0.25 if sg.coal_cells > 0 else 0.0) + (0.3 if sg.rig >= 0 else 0.0), 0.0, 1.0)
+		3: return 1.0 if sg.rubble.size() > 0 else clampf(sg.stress, 0.0, 1.0)
+		4: return clampf(sg.water / 0.75, 0.0, 1.0)
+		5: return clampf((sg.pt + sg.prog) / (260.0 * (1.0 + 1.2 * float(Game.up.get("vent", 0)))), 0.0, 1.0)
+	return 0.0
+
 func mine_no(sg: Segment) -> int:
 	var root := sg.root_of(segs)
 	var n := 0
@@ -88,7 +130,7 @@ func mine_no(sg: Segment) -> int:
 func pick_face(w: Worker) -> Segment:
 	var best: Segment = null; var bs := INF
 	for sg in segs:
-		if sg.dead or sg.crew.size() >= 2: continue
+		if sg.dead or sg.crew.size() >= 2 or mine_closed(sg): continue
 		var rub: bool = sg.rubble.size() > 0
 		if hazards.flooded(sg) or hazards.gas_out(sg): continue
 		if not rub and sg.done(): continue
@@ -248,6 +290,7 @@ func _tick_items(dt: float) -> void:
 		if it[4]: keep.append(it); continue
 		if it[0] >= 0:
 			var sg: Segment = segs[it[0]]
+			if mine_closed(sg) or sg.belt < it[1]: keep.append(it); continue
 			it[1] -= BELT_SPEED * (3.0 if sg.is_shaft() else 1.0) * dt
 			if it[1] <= 0.0:
 				if sg.parent >= 0:
@@ -369,6 +412,12 @@ func _draw() -> void:
 			p = Vector2(HEAD_X, -118.0).lerp(Vector2(root.a.x, Terrain.ground_y(root.a.x) - 6.0), t)
 		draw_rect(Rect2(p.x - 1.4, p.y - 2.8, 2.8, 2.8), Mats.COLORS[it[2]].lightened(0.15))
 	for t in trucks: _draw_truck(t)
+	if view_filter > 0:
+		var fc: Color = [Color.WHITE, Color(0.55, 0.95, 0.35), Color(1.0, 0.5, 0.15), Color(1.0, 0.25, 0.2), Color(0.3, 0.6, 1.0), Color(0.4, 0.9, 0.95)][view_filter]
+		for sg in segs:
+			if sg.dead or sg.prog < 0.5: continue
+			var v := filter_value(sg)
+			draw_line(sg.pos(0.0), sg.pos(sg.prog), Color(fc.r, fc.g, fc.b, 0.18 + 0.62 * v), Segment.R * 2.0)
 	fx.draw(self)
 	# the plan being dragged
 	if not drag_plan.is_empty():
@@ -391,6 +440,7 @@ func _root_for_overland(it: Array) -> Segment:
 
 func _draw_tunnel(sg: Segment) -> void:
 	var a := sg.pos(0.0); var b := sg.pos(sg.prog)
+	var closed := mine_closed(sg)
 	# broken rim, then the dark interior, then the back wall showing the rock it was cut through
 	draw_line(a - sg.u * (Segment.R if sg.parent < 0 else 0.0), b, Color("130e0c"), Segment.R * 2.0 + 6.0)
 	var s := 0.0
@@ -405,9 +455,9 @@ func _draw_tunnel(sg: Segment) -> void:
 		draw_line(sg.pos(0.0) + sg.n * 7.0, b + sg.n * 7.0, Color("5a5d63"), 1.0)
 	elif sg.has_belt and sg.belt > 1.0:
 		var f0 := sg.floor_pos(0.0); var f1 := sg.floor_pos(sg.belt)
-		draw_line(f0, f1, Color("2a2a2e"), 2.2)
+		draw_line(f0, f1, Color("5a3a28") if closed else Color("2a2a2e"), 2.2)
 		var k := 0.0
-		var ph := fmod(Game.time * BELT_SPEED, 14.0)
+		var ph := 0.0 if closed else fmod(Game.time * BELT_SPEED, 14.0)
 		while k < sg.belt:
 			draw_circle(sg.floor_pos(k) + sg.n * 1.4, 0.9, Color("8d9198")); k += 14.0
 		var m2 := fmod(-ph, 14.0)
@@ -462,6 +512,12 @@ func _draw_portal(sg: Segment) -> void:
 	draw_rect(Rect2(x - 7.0, gy - 26.0, 14.0, 28.0), Color("6b4a2c"))
 	draw_rect(Rect2(x - 5.0, gy - 23.0, 10.0, 25.0), Color("0d0a08"))
 	_sign(Vector2(x + o * 10.0, gy - 36.0), "MINE No.%d" % mine_no(sg))
+	if sg.decom:
+		# boarded over, with a CLOSED board nailed across the posts
+		for k in 3: draw_line(Vector2(x - 6.0, gy - 20.0 + k * 7.0), Vector2(x + 6.0, gy - 17.0 + k * 7.0), Color("7a5a3a"), 2.0)
+		draw_rect(Rect2(x - 15.0, gy - 12.0, 30.0, 7.0), Color("c9c2b3"))
+		draw_rect(Rect2(x - 15.0, gy - 12.0, 30.0, 7.0), Color("7a3a2a"), false, 1.0)
+		draw_string(ThemeDB.fallback_font, Vector2(x - 12.0, gy - 6.5), "CLOSED", HORIZONTAL_ALIGNMENT_LEFT, -1, 6, Color("7a3a2a"))
 
 func _draw_headframe(sg: Segment) -> void:
 	var x := sg.a.x; var gy := Terrain.ground_y(x)
@@ -595,13 +651,15 @@ func _smoke() -> void:
 		for c in cars: c.tick(0.05)
 		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05); hazards.tick(0.05); fx.tick(0.05)
 		frames += 1
+		if frames == 2400 and sg2: decommission(sg2); salvage(sg2)
 		if frames % 600 == 0:
 			var ws := ""
 			for w in workers: ws += "%d:%s/%d/%d/%.0f " % [w.role, ["I","W","D","K","R"][w.state], w.task, w.path.size(), w.energy]
 			print("t=%d prog=%d/%d crew=%s items=%d pile=%.1f money=%d sold=%.1f  %s" % [int(Game.time), int(sg.prog), int(sg.length), str(sg.crew), items.size(), Game.pile, int(Game.money), sold_tons, ws])
 	if sg.prog < 40.0: ok = false; print("FAIL: face barely moved")
 	if sold_tons <= 0.0 and Game.pile <= 0.0 and items.size() == 0: ok = false; print("FAIL: nothing came out")
-	print("RESULT %s prog=%d money=%d sold=%.1f coalcells=%d sup=%d stress=%.2f water=%.2f gas=%.2f rig=%d car=%s rock=%s" % [("OK" if ok else "FAIL"), int(sg.prog), int(Game.money), sold_tons, sg.coal_cells, int(sg.sup), sg.stress, sg.water, hazards.gas_of(sg), sg.rig, ("%s/%d/h%d prog=%d" % [cars[0].state, cars[0].cargo.size(), cars[0].hauled, int(sg3.prog)]) if sg3 else "none", ("%d/%d soft=%s bp=%d" % [int(sg2.prog), int(sg2.length), sg2.soft, sg2.bp]) if sg2 else "none"])
+	print("RESULT %s prog=%d money=%d sold=%.1f coalcells=%d sup=%d stress=%.2f water=%.2f gas=%.2f rig=%d car=%s rock=%s" % [("OK" if ok else "FAIL"), int(sg.prog), int(Game.money), sold_tons, sg.coal_cells, int(sg.sup), sg.stress, sg.water, hazards.gas_of(sg), sg.rig, ("%s/%d/h%d prog=%d" % [cars[0].state, cars[0].cargo.size(), cars[0].hauled, int(sg3.prog)]) if sg3 else "none", ("%d/%d soft=%s bp=%d decom=%s belt=%.0f salv=%s" % [int(sg2.prog), int(sg2.length), sg2.soft, sg2.bp, sg2.decom, sg2.belt, sg2.salvage]) if sg2 else "none"])
+	if sg2 and sg2.belt > 1.0: ok = false; print("FAIL: belt not salvaged")
 	get_tree().quit(0 if ok else 1)
 
 # ---------- screenshot for the build log: godot --path . -- --shot (needs a display, e.g. xvfb-run) ----------
@@ -647,6 +705,19 @@ func _shot() -> void:
 		for i in 4: await get_tree().process_frame
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png("user://shot4.png")
+	# night over the yard, then the methane filter
+	Game.time = floorf(Game.time / Game.DAY_LEN) * Game.DAY_LEN + Game.DAY_LEN * 0.78
+	cam.position = Vector2(1900.0, -150.0); cam.zoom = Vector2(0.9, 0.9)
+	for i in 4: await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("user://shot6.png")
+	Game.time = floorf(Game.time / Game.DAY_LEN) * Game.DAY_LEN + 5.0
+	view_filter = 1; hud.view.select(1); hud.view.item_selected.emit(1)
+	cam.position = sg.pos(80.0); cam.zoom = Vector2(1.4, 1.4)
+	for i in 4: await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("user://shot7.png")
+	view_filter = 0; hud.view.select(0); hud.view.item_selected.emit(0)
 	if cars.size() > 0 and cars[0].task >= 0:
 		cam.position = cars[0].position; cam.zoom = Vector2(3.0, 3.0)
 		for i in 4: await get_tree().process_frame
@@ -658,12 +729,12 @@ func _shot() -> void:
 # ---------- the manager: new headings toward coal whenever the crews are short of faces ----------
 func auto_plan() -> void:
 	var miners := workers.filter(func(w): return w.role == Worker.Role.MINER).size()
-	var open := segs.filter(func(sg): return not sg.dead and sg.prog < sg.length - 40.0 and sg.rubble.is_empty()).size()
+	var open := segs.filter(func(sg): return not sg.dead and not mine_closed(sg) and sg.prog < sg.length - 40.0 and sg.rubble.is_empty()).size()
 	var want := maxi(1, int(ceil(miners / 2.0)))
 	if open >= want or Game.money < 400.0: return
 	var starts := []
 	for sg in segs:
-		if sg.dead or not sg.done() or sg.rubble.size() > 0: continue
+		if sg.dead or not sg.done() or sg.rubble.size() > 0 or mine_closed(sg): continue
 		var s := 24.0
 		while s < sg.prog - 8.0:
 			starts.append({"seg": sg.id, "s": s, "pos": sg.pos(s)}); s += 26.0

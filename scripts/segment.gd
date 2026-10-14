@@ -26,6 +26,8 @@ var rig := -1                     # continuous miner cutting this face
 var bp := 0                       # drill-and-blast phase in rock: 0 drilling, 1 charging, 2 clear and fire, 3 smoke
 var dh := 0.0                     # drilling done toward the next round, 0..1
 var bt := 0.0                     # timer inside the blast phase
+var decom := false                # (root only) the mine is closed: nobody goes in, the belt is dead
+var salvage := false              # (root only) a crew is pulling the conveyor out
 var has_belt := true               # conveyor laid as the tunnel advances; bare tunnels need shuttle cars
 var soft := true                  # the face is coal or soil (dug straight out) rather than rock (drilled and shot)
 

@@ -26,7 +26,7 @@ func tick(dt: float) -> void:
 			# a bare tunnel with muck waiting at its face
 			var best := -1; var bn := 0
 			for sg in world.segs:
-				if sg.dead or sg.has_belt or sg.rubble.size() > 0: continue
+				if sg.dead or sg.has_belt or sg.rubble.size() > 0 or world.mine_closed(sg): continue
 				if world.cars.any(func(c): return c != self and c.task == sg.id): continue
 				var n := 0
 				for it in world.items:

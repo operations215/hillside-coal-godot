@@ -22,15 +22,26 @@ func _draw() -> void:
 	var z := cam.zoom.x
 	var vs := get_viewport_rect().size / z
 	var top := cam.position - vs * 0.5
-	# sky
-	draw_rect(Rect2(top, vs), Color("5b7fa8"))
+	# sky, by day and by night
+	var nf: float = Game.night_f()
+	var c_top := Color("5b7fa8").lerp(Color("070b1c"), nf); var c_hor := Color("c9b6a0").lerp(Color("2a2742"), nf)
+	draw_rect(Rect2(top, vs), c_top)
 	var gy := 0.0
 	for i in 40:
 		var y0 := gy - 640.0 + i * 16.0
-		draw_rect(Rect2(top.x, y0, vs.x, 16.5), Color("5b7fa8").lerp(Color("c9b6a0"), pow(i / 39.0, 1.6)))
+		draw_rect(Rect2(top.x, y0, vs.x, 16.5), c_top.lerp(c_hor, pow(i / 39.0, 1.6)))
+	if nf > 0.15:
+		for k in 90:
+			var sx := top.x + fposmod(k * 977.3 + cam.position.x * 0.02, vs.x); var sy := top.y + fposmod(k * 613.7, vs.y * 0.6)
+			if sy > gy - 60.0: continue
+			var tw := 0.5 + 0.5 * sin(Game.time * 2.0 + k)
+			draw_circle(Vector2(sx, sy), (0.6 + fposmod(k * 0.37, 0.9)) / z, Color(1.0, 1.0, 0.95, (nf - 0.15) * tw * 0.9))
+		var mx := top.x + vs.x * 0.78; var my := gy - 520.0
+		draw_circle(Vector2(mx, my), 14.0, Color(0.95, 0.95, 0.85, (nf - 0.15) * 0.9))
+		draw_circle(Vector2(mx - 5.0, my - 3.0), 12.0, c_top.lerp(Color(0.95, 0.95, 0.85), 0.1 * (1.0 - nf)))
 	# far ridges with a parallax slide, dark pines along them
 	for layer in [[0.06, Color("8a7480"), 60.0, 300.0], [0.14, Color("6c5d6b"), 45.0, 220.0], [0.26, Color("4f4652"), 35.0, 150.0]]:
-		var f: float = layer[0]; var col: Color = layer[1]; var amp: float = layer[2]; var base: float = layer[3]
+		var f: float = layer[0]; var col: Color = layer[1].darkened(0.65 * nf); var amp: float = layer[2]; var base: float = layer[3]
 		var pts := PackedVector2Array()
 		pts.append(Vector2(top.x - 50, 400))
 		var x := top.x - 50.0

@@ -22,6 +22,11 @@ var sup := 0.0                    # feet of roof bolted from the start
 var stress := 0.0                 # 0..1, the roof lets go at 1
 var rubble: Array = []            # [a, b] feet of fallen roof blocking the tunnel
 var water := 0.0                  # 0 dry .. 1 full to the roof at the face
+var rig := -1                     # continuous miner cutting this face
+var bp := 0                       # drill-and-blast phase in rock: 0 drilling, 1 charging, 2 clear and fire, 3 smoke
+var dh := 0.0                     # drilling done toward the next round, 0..1
+var bt := 0.0                     # timer inside the blast phase
+var soft := true                  # the face is coal or soil (dug straight out) rather than rock (drilled and shot)
 
 func setup(p_a: Vector2, p_b: Vector2, p_parent: int, p_pt: float) -> void:
 	a = p_a; b = p_b; parent = p_parent; pt = p_pt

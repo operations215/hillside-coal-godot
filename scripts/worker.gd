@@ -30,6 +30,7 @@ var path: Array = []
 var think := 0.0
 var anim := 0.0
 var work_t := 0.0
+var rig := -1                     # continuous miner this miner drives
 var world: Node = null
 
 func _ready() -> void:
@@ -69,18 +70,30 @@ func tick(dt: float) -> void:
 	queue_redraw()
 
 func leave_and_idle() -> void:
+	_park_rig()
 	world.leave_face(self); state = State.IDLE; think = 0.0; clearing = false; path = []
 
 func _go_home() -> void:
+	_park_rig()
 	world.leave_face(self)
 	path = world.build_path(self, -1, BUNK_X + randf_range(-16, 16))
 	state = State.WALK; task = -2; clearing = false
+
+func _park_rig() -> void:
+	if rig < 0: return
+	var r: Rig = world.rigs[rig]
+	r.op = -1; r.cutting = false
+	if r.seg >= 0 and world.seg_alive(r.seg): world.segs[r.seg].rig = -1
+	rig = -1
 
 func _find_face() -> void:
 	var best: Segment = world.pick_face(self)
 	if best == null: return
 	best.crew.append(id); task = best.id
 	clearing = best.rubble.size() > 0
+	if not clearing and best.rig < 0 and rig < 0:
+		for r in world.rigs:
+			if r.op < 0: r.op = id; rig = r.id; best.rig = r.id; break
 	var at: float = (maxf(0.0, best.rubble[0] - 5.0 - 7.0 * (best.crew.size() - 1))) if clearing else maxf(0.0, best.prog - 6.0 - 7.0 * (best.crew.size() - 1))
 	path = world.build_path(self, best.id, at)
 	state = State.WALK
@@ -148,16 +161,56 @@ func _dig(dt: float) -> void:
 	else:
 		if sg.done() or H.flooded(sg) or H.gas_out(sg) or sg.rubble.size() > 0:
 			leave_and_idle(); return
-		var stand := maxf(0.0, sg.prog - 5.0 - 7.0 * maxi(0, sg.crew.find(id)))
-		position = position.lerp(sg.floor_pos(stand), minf(1.0, dt * 4.0)); seg = sg.id; s = stand
+		var back: float = 60.0 if (not sg.soft and sg.bp >= 1) else 0.0
+		var stand := maxf(0.0, sg.prog - 5.0 - back - 7.0 * maxi(0, sg.crew.find(id)))
+		position = position.lerp(sg.floor_pos(stand), minf(1.0, dt * (1.5 if back > 0.0 else 4.0))); seg = sg.id; s = stand
 		var ahead: Vector2 = sg.pos(sg.prog + 2.0)
-		var hard: float = Mats.HARD[world.terrain.mat_world(ahead.x, ahead.y)]
+		var m: int = world.terrain.mat_world(ahead.x, ahead.y)
+		var hard: float = Mats.HARD[m]
 		if hard > 50.0:
 			world.stop_segment(sg); return
-		if sg.crew.find(id) == 0:
-			world.advance(sg, dt * 2.2 * skill / pow(maxf(1.0, hard), 0.8))
+		sg.soft = m == Mats.COAL or m == Mats.SOIL or m == Mats.SAND or m == Mats.CLAY or m == Mats.AIR
+		if rig >= 0:
+			# the continuous miner does the cutting; the driver only steers
+			var r: Rig = world.rigs[rig]
+			r.seg = sg.id; r.cutting = true; r.dir = face_dir; r.drum += dt * 12.0
+			r.position = sg.floor_pos(maxf(0.0, sg.prog - 14.0)) + Vector2(0, 0)
+			r.rotation = sg.u.angle() if face_dir > 0 else sg.u.angle() + PI
+			position = r.position - sg.u * 6.0; seg = sg.id; s = sg.prog - 20.0
+			if sg.soft or hard < 3.5:
+				world.advance(sg, dt * 9.0 * skill / pow(maxf(1.0, hard), 0.6))
+				Game.pay(-Rig.RUN_COST * dt)
+				var fp: Vector2 = sg.pos(sg.prog - 2.0)
+				for k in 2: world.fx.puff(fp + Vector2(randf_range(-4, 4), randf_range(-8, 8)), -sg.u * randf_range(6, 16) + Vector2(0, randf_range(-3, 3)), 0.4, 0.8, Color(0.8, 0.88, 0.96, 0.7), "spray")
+			else:
+				world.stop_segment(sg); Game.toast.emit("The continuous miner can't cut that rock. Crews with drills and powder take it from here."); return
+		elif sg.soft:
+			if sg.crew.find(id) == 0:
+				world.advance(sg, dt * 2.2 * skill / pow(maxf(1.0, hard), 0.8))
+		else:
+			_blast_cycle(sg, dt, hard)
 	energy -= dt * 0.9
 	if energy < 10.0: _go_home()
+
+## Rock: the crew drills a round of holes, loads them, backs off and fires. Each shot pulls about 10 ft.
+func _blast_cycle(sg: Segment, dt: float, hard: float) -> void:
+	match sg.bp:
+		0:
+			if sg.crew.find(id) == 0: sg.dh += dt * 0.08 * skill / pow(hard, 0.5)
+			if randf() < dt * 3.0:
+				var fp: Vector2 = sg.pos(sg.prog - 1.0)
+				world.fx.puff(fp + Vector2(randf_range(-3, 3), randf_range(-6, 6)), -sg.u * randf_range(5, 12), 0.6, 1.0, Color(0.55, 0.52, 0.5, 0.7))
+			if sg.dh >= 1.0: sg.dh = 1.0; sg.bp = 1; sg.bt = 0.0
+		1:
+			sg.bt += dt
+			if sg.bt > 3.0: sg.bp = 2; sg.bt = 0.0
+		2:
+			sg.bt += dt
+			if sg.bt > 2.5:
+				world.shoot(sg); sg.bp = 3; sg.bt = 0.0
+		3:
+			sg.bt += dt
+			if sg.bt > 4.0: sg.bp = 0; sg.dh = 0.0
 
 func _work(dt: float) -> void:
 	work_t -= dt
@@ -180,6 +233,7 @@ func _work(dt: float) -> void:
 	if energy < 10.0: _go_home()
 
 func _draw() -> void:
+	if rig >= 0 and state == State.DIG: return
 	var f := face_dir
 	var walking := state == State.WALK
 	var digging := state == State.DIG or (state == State.WORK and role == Role.BOLTER)

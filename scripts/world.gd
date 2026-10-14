@@ -20,6 +20,8 @@ var hover := Vector2.ZERO
 var sold_tons := 0.0
 var toasts: Array = []
 var hazards: Hazards
+var fx := FX.new()
+var rigs: Array = []
 var shake := 0.0
 var plan_wait := 0.0
 
@@ -50,6 +52,23 @@ func has_role(name: String) -> bool:
 	var r := Worker.ROLE_NAME.find(name) if name != "safety" else Worker.Role.SAFETY
 	return workers.any(func(w): return w.role == r)
 
+func buy_rig() -> void:
+	if not Game.spend(Rig.COST): return
+	var r := Rig.new(); r.id = rigs.size(); r.position = Vector2(1180.0 + rigs.size() * 50.0, 0.0)
+	rigs.append(r); add_child(r)
+	Game.toast.emit("A continuous miner is delivered to the yard. The next miner heading to a face drives it in.")
+
+## A round goes off: ten feet of rock comes down at once, with smoke, a thump and a shake of the ground.
+func shoot(sg: Segment) -> void:
+	var fp: Vector2 = sg.pos(sg.prog)
+	advance(sg, 10.0)
+	shake = 0.6
+	for k in 40: fx.puff(fp + Vector2(randf_range(-6, 6), randf_range(-8, 8)), -sg.u * randf_range(10, 60) + Vector2(randf_range(-10, 10), randf_range(-10, 10)), randf_range(2.0, 4.0), randf_range(2.0, 4.0), Color(0.35, 0.33, 0.32, 0.9), "smoke")
+	for k in 30: fx.puff(fp, -sg.u * randf_range(20, 90) + Vector2(randf_range(-30, 30), randf_range(-60, 10)), 1.5, 1.0, Color("8d9198"), "bit")
+	# a shot in a gassy mine is how disasters start
+	if hazards.gas_of(sg) > 2.5 and randf() < 0.35:
+		hazards._explode(segs[sg.root_of(segs)], hazards.gas_of(sg))
+
 func mine_no(sg: Segment) -> int:
 	var root := sg.root_of(segs)
 	var n := 0
@@ -62,7 +81,8 @@ func pick_face(w: Worker) -> Segment:
 	for sg in segs:
 		if sg.dead or sg.crew.size() >= 2: continue
 		var rub: bool = sg.rubble.size() > 0
-		if not rub and (sg.done() or hazards.flooded(sg) or hazards.gas_out(sg)): continue
+		if hazards.flooded(sg) or hazards.gas_out(sg): continue
+		if not rub and sg.done(): continue
 		var f: Vector2 = sg.pos(sg.rubble[0] if rub else sg.prog)
 		var sc: float = f.distance_to(w.position) + sg.crew.size() * 700.0 - (1500.0 if rub else 0.0)
 		if sc < bs: bs = sc; best = sg
@@ -275,7 +295,7 @@ func _process(delta: float) -> void:
 			var sub := dt / steps
 			Game.tick(sub)
 			for w in workers: w.tick(sub)
-			_tick_items(sub); _tick_trucks(sub); _tick_wages(sub); hazards.tick(sub)
+			_tick_items(sub); _tick_trucks(sub); _tick_wages(sub); hazards.tick(sub); fx.tick(sub)
 	shake = maxf(0.0, shake - delta)
 	cam.offset = Vector2(randf_range(-6, 6), randf_range(-6, 6)) * shake if shake > 0.0 else Vector2.ZERO
 	queue_redraw()
@@ -331,6 +351,7 @@ func _draw() -> void:
 			p = Vector2(HEAD_X, -118.0).lerp(Vector2(root.a.x, Terrain.ground_y(root.a.x) - 6.0), t)
 		draw_rect(Rect2(p.x - 1.4, p.y - 2.8, 2.8, 2.8), Mats.COLORS[it[2]].lightened(0.15))
 	for t in trucks: _draw_truck(t)
+	fx.draw(self)
 	# the plan being dragged
 	if not drag_plan.is_empty():
 		draw_line(drag_plan.a, drag_plan.b, Color(0.52, 0.72, 0.42, 0.35), Segment.R * 2.0)
@@ -474,14 +495,20 @@ func _smoke() -> void:
 	if pl.is_empty():
 		print("FAIL: no plan"); get_tree().quit(1); return
 	var sg := make_segment(pl)
-	for i in 3: hire(Worker.Role.MINER)
+	Game.money = 20000.0
+	buy_rig()
+	# a second heading steeply down into rock, so drilling and blasting gets exercised
+	var st2 := snap_start(Vector2(2600.0, Terrain.ground_y(2600.0)))
+	var pl2 := plan_to(st2, Vector2(2800.0, Terrain.ground_y(2600.0) + 330.0))
+	var sg2: Segment = make_segment(pl2) if not pl2.is_empty() else null
+	for i in 5: hire(Worker.Role.MINER)
 	hire(Worker.Role.BOLTER)
 	var frames := 0
 	var ok := true
 	while frames < 6000 and Game.day < 4:
 		Game.tick(0.05)
 		for w in workers: w.tick(0.05)
-		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05); hazards.tick(0.05)
+		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05); hazards.tick(0.05); fx.tick(0.05)
 		frames += 1
 		if frames % 600 == 0:
 			var ws := ""
@@ -489,19 +516,23 @@ func _smoke() -> void:
 			print("t=%d prog=%d/%d crew=%s items=%d pile=%.1f money=%d sold=%.1f  %s" % [int(Game.time), int(sg.prog), int(sg.length), str(sg.crew), items.size(), Game.pile, int(Game.money), sold_tons, ws])
 	if sg.prog < 40.0: ok = false; print("FAIL: face barely moved")
 	if sold_tons <= 0.0 and Game.pile <= 0.0 and items.size() == 0: ok = false; print("FAIL: nothing came out")
-	print("RESULT %s prog=%d money=%d sold=%.1f coalcells=%d sup=%d stress=%.2f water=%.2f gas=%.2f" % [("OK" if ok else "FAIL"), int(sg.prog), int(Game.money), sold_tons, sg.coal_cells, int(sg.sup), sg.stress, sg.water, hazards.gas_of(sg)])
+	print("RESULT %s prog=%d money=%d sold=%.1f coalcells=%d sup=%d stress=%.2f water=%.2f gas=%.2f rig=%d rock=%s" % [("OK" if ok else "FAIL"), int(sg.prog), int(Game.money), sold_tons, sg.coal_cells, int(sg.sup), sg.stress, sg.water, hazards.gas_of(sg), sg.rig, ("%d/%d soft=%s bp=%d" % [int(sg2.prog), int(sg2.length), sg2.soft, sg2.bp]) if sg2 else "none"])
 	get_tree().quit(0 if ok else 1)
 
 # ---------- screenshot for the build log: godot --path . -- --shot (needs a display, e.g. xvfb-run) ----------
 func _shot() -> void:
 	var st := snap_start(Vector2(2200.0, Terrain.ground_y(2200.0)))
 	var sg := make_segment(plan_to(st, Vector2(2500.0, Terrain.ground_y(2200.0) + 90.0)))
-	for i in 2: hire(Worker.Role.MINER)
+	Game.money = 20000.0; buy_rig()
+	var st2 := snap_start(Vector2(2600.0, Terrain.ground_y(2600.0)))
+	var pl2 := plan_to(st2, Vector2(2800.0, Terrain.ground_y(2600.0) + 330.0))
+	if not pl2.is_empty(): make_segment(pl2)
+	for i in 4: hire(Worker.Role.MINER)
 	hire(Worker.Role.BOLTER)
 	for f in 2400:
 		Game.tick(0.05)
 		for w in workers: w.tick(0.05)
-		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05); hazards.tick(0.05)
+		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05); hazards.tick(0.05); fx.tick(0.05)
 	cam.position = sg.pos(60.0); cam.zoom = Vector2(2.5, 2.5)
 	for i in 4: await get_tree().process_frame
 	await RenderingServer.frame_post_draw
@@ -510,6 +541,12 @@ func _shot() -> void:
 	for i in 4: await get_tree().process_frame
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png("user://shot2.png")
+	if segs.size() > 1:
+		var s2: Segment = segs[1]
+		cam.position = s2.pos(maxf(0.0, s2.prog - 30.0)); cam.zoom = Vector2(3.0, 3.0)
+		for i in 4: await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("user://shot3.png")
 	print("SHOTS ", OS.get_user_data_dir())
 	get_tree().quit()
 

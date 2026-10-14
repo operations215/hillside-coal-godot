@@ -24,6 +24,9 @@ func _on_hire(role: int = 0) -> void:
 		var w: Worker = world.hire(role)
 		show_toast("%s joins the crew as a %s at $%d a shift." % [w.worker_name, Worker.ROLE_NAME[role], int(w.wage)])
 
+func _on_rig() -> void:
+	get_parent().buy_rig()
+
 func _on_buy(key: String) -> void:
 	Game.buy(key)
 	_refresh_panel()

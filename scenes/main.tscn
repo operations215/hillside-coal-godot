@@ -40,10 +40,6 @@ text = "DAY 1"
 layout_mode = 2
 text = "CREW"
 
-[node name="Hire" type="Button" parent="HUD/Top"]
-layout_mode = 2
-text = "Hire miner ($45)"
-
 [node name="Pause" type="Button" parent="HUD/Top"]
 layout_mode = 2
 text = "❚❚"
@@ -60,14 +56,61 @@ text = "2×"
 layout_mode = 2
 text = "3×"
 
+[node name="Panel" type="PanelContainer" parent="HUD"]
+offset_left = 930.0
+offset_top = 50.0
+offset_right = 1388.0
+offset_bottom = 330.0
+
+[node name="Box" type="VBoxContainer" parent="HUD/Panel"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="HUD/Panel/Box"]
+layout_mode = 2
+text = "OFFICE"
+
+[node name="HireMiner" type="Button" parent="HUD/Panel/Box"]
+layout_mode = 2
+text = "Hire miner ($40)"
+
+[node name="HireBolter" type="Button" parent="HUD/Panel/Box"]
+layout_mode = 2
+text = "Hire roof bolter ($52)"
+
+[node name="HireSafety" type="Button" parent="HUD/Panel/Box"]
+layout_mode = 2
+text = "Hire safety man ($64)"
+
+[node name="HireManager" type="Button" parent="HUD/Panel/Box"]
+layout_mode = 2
+text = "Hire manager ($90)"
+
+[node name="roof" type="Button" parent="HUD/Panel/Box"]
+layout_mode = 2
+text = "Roof"
+
+[node name="pump" type="Button" parent="HUD/Panel/Box"]
+layout_mode = 2
+text = "Pumps"
+
+[node name="vent" type="Button" parent="HUD/Panel/Box"]
+layout_mode = 2
+text = "Ventilation"
+
 [node name="Toasts" type="VBoxContainer" parent="HUD"]
 offset_left = 12.0
 offset_top = 50.0
 offset_right = 450.0
 offset_bottom = 300.0
 
-[connection signal="pressed" from="HUD/Top/Hire" to="HUD" method="_on_hire"]
 [connection signal="pressed" from="HUD/Top/Pause" to="HUD" method="_on_speed" binds= [0]]
 [connection signal="pressed" from="HUD/Top/Sp1" to="HUD" method="_on_speed" binds= [1]]
 [connection signal="pressed" from="HUD/Top/Sp2" to="HUD" method="_on_speed" binds= [2]]
 [connection signal="pressed" from="HUD/Top/Sp3" to="HUD" method="_on_speed" binds= [3]]
+[connection signal="pressed" from="HUD/Panel/Box/HireMiner" to="HUD" method="_on_hire" binds= [0]]
+[connection signal="pressed" from="HUD/Panel/Box/HireBolter" to="HUD" method="_on_hire" binds= [1]]
+[connection signal="pressed" from="HUD/Panel/Box/HireSafety" to="HUD" method="_on_hire" binds= [2]]
+[connection signal="pressed" from="HUD/Panel/Box/HireManager" to="HUD" method="_on_hire" binds= [3]]
+[connection signal="pressed" from="HUD/Panel/Box/roof" to="HUD" method="_on_buy" binds= ["roof"]]
+[connection signal="pressed" from="HUD/Panel/Box/pump" to="HUD" method="_on_buy" binds= ["pump"]]
+[connection signal="pressed" from="HUD/Panel/Box/vent" to="HUD" method="_on_buy" binds= ["vent"]]

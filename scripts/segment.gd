@@ -18,6 +18,10 @@ var crew: Array[int] = []         # worker ids at the face
 var dead := false
 var belt := 0.0                   # feet of conveyor laid from the start
 var coal_cells := 0
+var sup := 0.0                    # feet of roof bolted from the start
+var stress := 0.0                 # 0..1, the roof lets go at 1
+var rubble: Array = []            # [a, b] feet of fallen roof blocking the tunnel
+var water := 0.0                  # 0 dry .. 1 full to the roof at the face
 
 func setup(p_a: Vector2, p_b: Vector2, p_parent: int, p_pt: float) -> void:
 	a = p_a; b = p_b; parent = p_parent; pt = p_pt

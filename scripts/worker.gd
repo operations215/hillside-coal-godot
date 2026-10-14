@@ -1,33 +1,50 @@
-## A miner: walks from the crew quarters to a face, digs, and goes home to rest when worn out.
+## A worker: miners dig and clear rubble, roof bolters follow the faces bolting the roof, safety men walk the
+## mine checking gas, and the manager plans new headings from the office.
 class_name Worker
 extends Node2D
 
-enum State { IDLE, WALK, DIG, REST }
+enum State { IDLE, WALK, DIG, WORK, REST }
+enum Role { MINER, BOLTER, SAFETY, MANAGER }
 
 const WALK_SPEED := 42.0
 const BUNK_X := 1300.0
+const OFFICE_X := 1180.0
+const ROLE_NAME := ["miner", "roof bolter", "safety man", "manager"]
+const ROLE_WAGE := [40.0, 52.0, 64.0, 90.0]
 const NAMES_FIRST := ["Earl", "Dewey", "Lonnie", "Roy", "Clyde", "Vernon", "Ray", "Otis", "Wade", "Hollis", "June", "Darlene", "Opal", "Wanda"]
 const NAMES_LAST := ["Hatfield", "Caudill", "Mullins", "Slone", "Combs", "Blankenship", "Adkins", "Vance", "Tackett", "Justice"]
 
 var id := -1
+var role := Role.MINER
 var worker_name := ""
 var skill := 1.0
-var wage := 40.0                  # dollars a shift
+var wage := 40.0
 var energy := 100.0
 var state := State.IDLE
-var seg := -1                     # tunnel the worker stands in, -1 on the surface
-var s := 0.0                      # feet along that tunnel
+var seg := -1
+var s := 0.0
 var face_dir := 1.0
-var task := -1                    # segment being dug
-var path: Array = []              # waypoints [seg, s] or [-1, x]
+var task := -1                    # segment being worked, -2 heading home
+var clearing := false             # a miner digging out rubble rather than coal
+var path: Array = []
 var think := 0.0
 var anim := 0.0
+var work_t := 0.0
 var world: Node = null
 
 func _ready() -> void:
 	worker_name = NAMES_FIRST[randi() % NAMES_FIRST.size()] + " " + NAMES_LAST[randi() % NAMES_LAST.size()]
 	position = Vector2(BUNK_X + randf_range(-20, 20), 0)
+	wage = round(ROLE_WAGE[role] * (0.5 + skill * 0.55))
 	z_index = 5
+
+func status() -> String:
+	match state:
+		State.REST: return "Resting in the crew quarters"
+		State.WALK: return "Walking home" if task == -2 else "Walking to work"
+		State.DIG: return "Digging out a cave-in" if clearing else "At the face"
+		State.WORK: return ["", "Bolting the roof", "Checking the air", "Planning"][role]
+	return "Waiting for work"
 
 func tick(dt: float) -> void:
 	anim += dt
@@ -35,28 +52,60 @@ func tick(dt: float) -> void:
 		State.REST:
 			energy = minf(100.0, energy + dt * 6.0)
 			if energy >= 100.0: state = State.IDLE
-		State.WALK:
-			_walk(dt)
-		State.DIG:
-			_dig(dt)
+		State.WALK: _walk(dt)
+		State.DIG: _dig(dt)
+		State.WORK: _work(dt)
 		State.IDLE:
 			think -= dt
 			if think > 0: return
 			think = 0.5
-			if energy < 15.0:
-				_go_home(); return
-			var best: Segment = world.pick_face(self)
-			if best:
-				best.crew.append(id); task = best.id
-				path = world.build_path(self, best.id, maxf(0.0, best.prog - 6.0 - 7.0 * (best.crew.size() - 1)))
-				state = State.WALK
+			if energy < 15.0: _go_home(); return
+			match role:
+				Role.MINER: _find_face()
+				Role.BOLTER: _find_bolting()
+				Role.SAFETY: _find_round()
+				Role.MANAGER:
+					position = Vector2(OFFICE_X, 0.0); state = State.WORK; work_t = 8.0
 	queue_redraw()
+
+func leave_and_idle() -> void:
+	world.leave_face(self); state = State.IDLE; think = 0.0; clearing = false; path = []
 
 func _go_home() -> void:
 	world.leave_face(self)
 	path = world.build_path(self, -1, BUNK_X + randf_range(-16, 16))
+	state = State.WALK; task = -2; clearing = false
+
+func _find_face() -> void:
+	var best: Segment = world.pick_face(self)
+	if best == null: return
+	best.crew.append(id); task = best.id
+	clearing = best.rubble.size() > 0
+	var at: float = (maxf(0.0, best.rubble[0] - 5.0 - 7.0 * (best.crew.size() - 1))) if clearing else maxf(0.0, best.prog - 6.0 - 7.0 * (best.crew.size() - 1))
+	path = world.build_path(self, best.id, at)
 	state = State.WALK
-	task = -2                     # heading home
+
+func _find_bolting() -> void:
+	var best: Segment = null; var bs := 0.0
+	for sg in world.segs:
+		if sg.dead or sg.rubble.size() > 0 or world.hazards.flooded(sg): continue
+		var U: float = sg.prog - sg.sup
+		if U < 10.0: continue
+		if world.workers.any(func(o): return o != self and o.role == Role.BOLTER and o.task == sg.id): continue
+		var sc: float = U * 4.0 + sg.stress * 2000.0 - sg.pos(sg.sup).distance_to(position) * 0.2
+		if sc > bs: bs = sc; best = sg
+	if best == null: return
+	task = best.id
+	path = world.build_path(self, best.id, best.sup + 3.0)
+	state = State.WALK
+
+func _find_round() -> void:
+	var live: Array = world.segs.filter(func(sg): return not sg.dead and sg.prog > 20.0 and sg.rubble.is_empty())
+	if live.is_empty() or randf() < 0.4: return
+	var sg: Segment = live[randi() % live.size()]
+	task = sg.id
+	path = world.build_path(self, sg.id, randf() * sg.prog)
+	state = State.WALK
 
 func _walk(dt: float) -> void:
 	var d := WALK_SPEED * dt * (0.7 if energy < 30.0 else 1.0)
@@ -76,68 +125,105 @@ func _walk(dt: float) -> void:
 		if task == -2:
 			state = State.REST; task = -1; seg = -1
 		elif task >= 0 and world.seg_alive(task):
-			state = State.DIG
 			var sg: Segment = world.segs[task]
 			face_dir = 1.0 if sg.u.x >= 0 else -1.0
+			if role == Role.MINER: state = State.DIG
+			else: state = State.WORK; work_t = 6.0 + randf() * 6.0
 		else:
 			state = State.IDLE; task = -1
 
 func _dig(dt: float) -> void:
-	if not world.seg_alive(task) or world.segs[task].done():
-		world.leave_face(self); state = State.IDLE; think = 0.0; return
+	if not world.seg_alive(task):
+		leave_and_idle(); return
 	var sg: Segment = world.segs[task]
-	# stand just behind the face, on the floor
-	var stand := maxf(0.0, sg.prog - 5.0 - 7.0 * maxi(0, sg.crew.find(id)))
-	var p: Vector2 = sg.floor_pos(stand)
-	position = position.lerp(p, minf(1.0, dt * 4.0)); seg = sg.id; s = stand
-	var hard: float = Mats.HARD[world.terrain.mat_world(sg.pos(sg.prog + 2.0).x, sg.pos(sg.prog + 2.0).y)]
-	if hard > 50.0:
-		world.stop_segment(sg); return
-	if sg.crew.find(id) == 0:
-		world.advance(sg, dt * 2.2 * skill / pow(maxf(1.0, hard), 0.8))
+	var H = world.hazards
+	if clearing:
+		if sg.rubble.is_empty(): leave_and_idle(); return
+		var stand: float = maxf(0.0, sg.rubble[0] - 4.0 - 7.0 * maxi(0, sg.crew.find(id)))
+		position = position.lerp(sg.floor_pos(stand), minf(1.0, dt * 4.0)); seg = sg.id; s = stand
+		sg.rubble[0] += dt * 0.9 * skill
+		if sg.rubble[0] >= sg.rubble[1]:
+			sg.rubble = []; sg.stress = 0.2; Game.toast.emit("The cave-in in mine No.%d is cleared." % world.mine_no(sg))
+			leave_and_idle(); return
+	else:
+		if sg.done() or H.flooded(sg) or H.gas_out(sg) or sg.rubble.size() > 0:
+			leave_and_idle(); return
+		var stand := maxf(0.0, sg.prog - 5.0 - 7.0 * maxi(0, sg.crew.find(id)))
+		position = position.lerp(sg.floor_pos(stand), minf(1.0, dt * 4.0)); seg = sg.id; s = stand
+		var ahead: Vector2 = sg.pos(sg.prog + 2.0)
+		var hard: float = Mats.HARD[world.terrain.mat_world(ahead.x, ahead.y)]
+		if hard > 50.0:
+			world.stop_segment(sg); return
+		if sg.crew.find(id) == 0:
+			world.advance(sg, dt * 2.2 * skill / pow(maxf(1.0, hard), 0.8))
 	energy -= dt * 0.9
-	if energy < 10.0:
-		_go_home()
+	if energy < 10.0: _go_home()
+
+func _work(dt: float) -> void:
+	work_t -= dt
+	match role:
+		Role.BOLTER:
+			if not world.seg_alive(task): leave_and_idle(); return
+			var sg: Segment = world.segs[task]
+			if sg.rubble.size() > 0 or sg.sup >= sg.prog - 1.0: task = -1; state = State.IDLE; think = 0.0; return
+			world.hazards.bolt(sg, dt, skill)
+			var p: Vector2 = sg.floor_pos(minf(sg.prog, sg.sup + 3.0))
+			position = position.lerp(p, minf(1.0, dt * 4.0)); seg = sg.id; s = sg.sup + 3.0
+			energy -= dt * 0.7
+		Role.SAFETY:
+			energy -= dt * 0.3
+			if work_t <= 0.0: task = -1; state = State.IDLE; think = 0.0
+		Role.MANAGER:
+			if work_t <= 0.0:
+				work_t = 8.0
+				world.auto_plan()
+	if energy < 10.0: _go_home()
 
 func _draw() -> void:
-	# a stick miner in the company blue, with a cap lamp. Legs and arms swing with the work.
 	var f := face_dir
 	var walking := state == State.WALK
-	var digging := state == State.DIG
+	var digging := state == State.DIG or (state == State.WORK and role == Role.BOLTER)
 	var q := anim * (9.0 if walking else 5.5)
 	var bob := absf(sin(q)) * 0.5 if walking else 0.0
 	var hip := Vector2(0, -9.0 - bob)
+	var suit: Color = [Color("2a3f6b"), Color("4a3a2a"), Color("2f6b3a"), Color("4a4a55")][role]
+	var suit2: Color = suit.lightened(0.12)
 	draw_rect(Rect2(-1.6, hip.y, 3.2, 1.2), Color("1d1c20"))
-	# legs
 	for i in 2:
-		var a := sin(q + i * PI) * (0.5 if walking else 0.08) if (walking or not digging) else (-0.35 if i == 0 else 0.4)
+		var a: float
+		if walking: a = sin(q + i * PI) * 0.5
+		elif digging: a = -0.35 if i == 0 else 0.4
+		else: a = -0.07 if i == 0 else 0.09
 		var knee := hip + Vector2(sin(a) * 4.5 * f, cos(a) * 4.5)
 		var foot := knee + Vector2(sin(a * 0.5) * 4.5 * f, cos(a * 0.5) * 4.5)
-		draw_line(hip, knee, Color("2a3f6b"), 2.4)
-		draw_line(knee, foot, Color("2a3f6b"), 2.2)
+		draw_line(hip, knee, suit, 2.4)
+		draw_line(knee, foot, suit, 2.2)
 		draw_rect(Rect2(foot.x - 1.6, foot.y - 0.8, 3.2, 1.4), Color("1a1a1e"))
-	# torso
 	var lean := 0.18 if digging else 0.06
 	var shoulder := hip + Vector2(sin(lean) * 8.0 * f, -8.0)
-	draw_line(hip, shoulder, Color("2d4a7a"), 4.2)
-	draw_rect(Rect2(shoulder.x - 2.6, shoulder.y + 1.0, 5.2, 1.4), Color("f2b705"))   # reflective stripe
-	# arms and the pick
+	draw_line(hip, shoulder, suit2, 4.2)
+	draw_rect(Rect2(shoulder.x - 2.6, shoulder.y + 1.0, 5.2, 1.4), Color("f2b705"))
 	var swing := sin(q) * 0.45 if walking else 0.0
 	var t := pow((sin(q) + 1.0) * 0.5, 1.4) if digging else 0.0
 	var up := 1.15 + 1.75 * t
+	if role == Role.BOLTER and digging: up = 2.6 + sin(anim * 40.0) * 0.05
 	var arm_a := up if digging else (0.3 + swing)
 	var hand := shoulder + Vector2(sin(arm_a) * 6.5 * f, cos(arm_a) * 6.5)
-	draw_line(shoulder, hand, Color("2d4a7a"), 2.2)
+	draw_line(shoulder, hand, suit2, 2.2)
 	if digging or walking:
-		var ta := (up + 0.45) if digging else 2.45
-		var tip := hand + Vector2(sin(ta) * 9.0 * f, cos(ta) * 9.0)
-		draw_line(hand, tip, Color("8a6a3a"), 1.4)
-		draw_line(tip + Vector2(-2.5 * f, -1.5), tip + Vector2(2.5 * f, 1.5), Color("66686e"), 2.0)
-	# head and hard hat with the lamp
+		if role == Role.BOLTER:
+			draw_line(hand, hand + Vector2(0, -14.0 if digging else -6.0), Color("8a8f96"), 2.0)
+		elif role == Role.MINER:
+			var ta := (up + 0.45) if digging else 2.45
+			var tip := hand + Vector2(sin(ta) * 9.0 * f, cos(ta) * 9.0)
+			draw_line(hand, tip, Color("8a6a3a"), 1.4)
+			draw_line(tip + Vector2(-2.5 * f, -1.5), tip + Vector2(2.5 * f, 1.5), Color("66686e"), 2.0)
+		elif role == Role.SAFETY:
+			draw_rect(Rect2(hand.x - 1.5, hand.y - 1.0, 3.0, 2.0), Color("f2b705"))
 	var head := shoulder + Vector2(sin(lean) * 3.0 * f, -4.5)
 	draw_circle(head, 2.6, Color("d9a977"))
-	draw_rect(Rect2(head.x - 3.0, head.y - 3.6, 6.0, 2.2), Color("f2b705"))
+	draw_rect(Rect2(head.x - 3.0, head.y - 3.6, 6.0, 2.2), [Color("f2b705"), Color("f2b705"), Color("e8e8e8"), Color("f1efe6")][role])
 	draw_circle(head + Vector2(2.2 * f, -2.3), 0.9, Color("fff2b0"))
-	if seg >= 0 or digging:
+	if seg >= 0:
 		var beam := PackedVector2Array([head + Vector2(2.5 * f, -2.3), head + Vector2(26.0 * f, -9.0), head + Vector2(28.0 * f, 6.0)])
 		draw_colored_polygon(beam, Color(1.0, 0.95, 0.7, 0.10))

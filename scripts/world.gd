@@ -19,6 +19,9 @@ var drag_plan := {}               # the planned segment while dragging
 var hover := Vector2.ZERO
 var sold_tons := 0.0
 var toasts: Array = []
+var hazards: Hazards
+var shake := 0.0
+var plan_wait := 0.0
 
 @onready var cam: Camera2D = $Camera2D
 @onready var hud: CanvasLayer = $HUD
@@ -27,7 +30,8 @@ func _ready() -> void:
 	terrain = Terrain.new()
 	add_child(terrain)
 	move_child(terrain, 0)
-	for i in 2: hire()
+	hazards = Hazards.new(self)
+	for i in 2: hire(Worker.Role.MINER)
 	Game.toast.connect(func(t): hud.show_toast(t))
 	if OS.get_cmdline_user_args().has("--smoke"):
 		call_deferred("_smoke")
@@ -36,19 +40,31 @@ func _ready() -> void:
 	hud.show_toast("Drag from the hillside into the ground to start a tunnel. Coal rides the conveyor out to the stockpile and trucks haul it to market.")
 
 # ---------- crew ----------
-func hire() -> Worker:
+func hire(role: int) -> Worker:
 	var w := Worker.new()
-	w.id = workers.size(); w.world = self; w.skill = randf_range(0.8, 1.3)
-	w.wage = round(40.0 * (0.5 + w.skill * 0.55))
+	w.id = workers.size(); w.world = self; w.skill = randf_range(0.8, 1.3); w.role = role
 	workers.append(w); add_child(w)
 	return w
+
+func has_role(name: String) -> bool:
+	var r := Worker.ROLE_NAME.find(name) if name != "safety" else Worker.Role.SAFETY
+	return workers.any(func(w): return w.role == r)
+
+func mine_no(sg: Segment) -> int:
+	var root := sg.root_of(segs)
+	var n := 0
+	for s in segs:
+		if s.parent < 0 and s.id <= root: n += 1
+	return n
 
 func pick_face(w: Worker) -> Segment:
 	var best: Segment = null; var bs := INF
 	for sg in segs:
-		if sg.dead or sg.done() or sg.crew.size() >= 2: continue
-		var f: Vector2 = sg.pos(sg.prog)
-		var sc: float = f.distance_to(w.position) + sg.crew.size() * 700.0
+		if sg.dead or sg.crew.size() >= 2: continue
+		var rub: bool = sg.rubble.size() > 0
+		if not rub and (sg.done() or hazards.flooded(sg) or hazards.gas_out(sg)): continue
+		var f: Vector2 = sg.pos(sg.rubble[0] if rub else sg.prog)
+		var sc: float = f.distance_to(w.position) + sg.crew.size() * 700.0 - (1500.0 if rub else 0.0)
 		if sc < bs: bs = sc; best = sg
 	return best
 
@@ -259,7 +275,9 @@ func _process(delta: float) -> void:
 			var sub := dt / steps
 			Game.tick(sub)
 			for w in workers: w.tick(sub)
-			_tick_items(sub); _tick_trucks(sub); _tick_wages(sub)
+			_tick_items(sub); _tick_trucks(sub); _tick_wages(sub); hazards.tick(sub)
+	shake = maxf(0.0, shake - delta)
+	cam.offset = Vector2(randf_range(-6, 6), randf_range(-6, 6)) * shake if shake > 0.0 else Vector2.ZERO
 	queue_redraw()
 
 # ---------- input ----------
@@ -361,6 +379,36 @@ func _draw_tunnel(sg: Segment) -> void:
 		draw_circle(lp, 1.2, Color("fff2b0"))
 		draw_circle(lp, 10.0, Color(1.0, 0.9, 0.6, 0.07))
 		l += 70.0
+	# roof bolts (or timber posts on the first tier) as far as the roof is supported
+	var k2 := 6.0
+	var tier: int = Game.up.get("roof", 0)
+	while k2 < sg.sup:
+		var rp := sg.pos(k2) - sg.n * (Segment.R - 0.5)
+		if tier == 0:
+			draw_line(sg.pos(k2) - sg.n * Segment.R, sg.pos(k2) + sg.n * Segment.R, Color("7a5a3a"), 1.8)
+		else:
+			draw_rect(Rect2(rp.x - 1.5, rp.y - 0.6, 3.0, 1.2), Color("8a8f96"))
+		k2 += 12.0
+	# the unsupported span shows its strain
+	if sg.stress > 0.3:
+		draw_line(sg.pos(sg.sup) - sg.n * Segment.R, sg.pos(sg.prog) - sg.n * Segment.R, Color(1.0, 0.3, 0.2, (sg.stress - 0.3) * 0.9), 2.0)
+	# water standing on the floor
+	if sg.water > 0.02:
+		var wd := sg.water * 2.0 * Segment.R
+		var p0 := sg.pos(0.0); var p1 := sg.pos(sg.prog)
+		draw_colored_polygon(PackedVector2Array([p0 + sg.n * Segment.R, p1 + sg.n * Segment.R, p1 + sg.n * (Segment.R - wd), p0 + sg.n * (Segment.R - wd)]), Color(0.3, 0.5, 0.8, 0.55))
+	# rubble from a cave-in
+	if sg.rubble.size() > 0:
+		var ra := sg.pos(sg.rubble[0]); var rb := sg.pos(sg.rubble[1])
+		draw_line(ra, rb, Color("3a3338"), Segment.R * 2.0)
+		var j: float = sg.rubble[0]
+		while j < sg.rubble[1]:
+			var rp := sg.pos(j) + sg.n * (Segment.R - 3.0 - fposmod(j * 7.3, 9.0))
+			draw_circle(rp, 2.0 + fposmod(j * 3.1, 2.0), Color("55505a")); j += 5.0
+	# methane haze near the roof
+	var g := hazards.gas_of(sg)
+	if g > 0.3:
+		draw_line(a - sg.n * (Segment.R - 3.0), b - sg.n * (Segment.R - 3.0), Color(0.6, 0.9, 0.5, minf(0.35, g * 0.08)), 6.0)
 	# the face
 	if not sg.done():
 		draw_line(b - sg.n * Segment.R, b + sg.n * Segment.R, Color("0a0806"), 2.0)
@@ -426,30 +474,34 @@ func _smoke() -> void:
 	if pl.is_empty():
 		print("FAIL: no plan"); get_tree().quit(1); return
 	var sg := make_segment(pl)
-	for i in 3: hire()
+	for i in 3: hire(Worker.Role.MINER)
+	hire(Worker.Role.BOLTER)
 	var frames := 0
 	var ok := true
 	while frames < 6000 and Game.day < 4:
 		Game.tick(0.05)
 		for w in workers: w.tick(0.05)
-		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05)
+		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05); hazards.tick(0.05)
 		frames += 1
 		if frames % 600 == 0:
-			print("t=%d prog=%d/%d crew=%d items=%d pile=%.1f money=%d sold=%.1f" % [int(Game.time), int(sg.prog), int(sg.length), sg.crew.size(), items.size(), Game.pile, int(Game.money), sold_tons])
+			var ws := ""
+			for w in workers: ws += "%d:%s/%d/%d/%.0f " % [w.role, ["I","W","D","K","R"][w.state], w.task, w.path.size(), w.energy]
+			print("t=%d prog=%d/%d crew=%s items=%d pile=%.1f money=%d sold=%.1f  %s" % [int(Game.time), int(sg.prog), int(sg.length), str(sg.crew), items.size(), Game.pile, int(Game.money), sold_tons, ws])
 	if sg.prog < 40.0: ok = false; print("FAIL: face barely moved")
 	if sold_tons <= 0.0 and Game.pile <= 0.0 and items.size() == 0: ok = false; print("FAIL: nothing came out")
-	print("RESULT %s prog=%d money=%d sold=%.1f coalcells=%d" % [("OK" if ok else "FAIL"), int(sg.prog), int(Game.money), sold_tons, sg.coal_cells])
+	print("RESULT %s prog=%d money=%d sold=%.1f coalcells=%d sup=%d stress=%.2f water=%.2f gas=%.2f" % [("OK" if ok else "FAIL"), int(sg.prog), int(Game.money), sold_tons, sg.coal_cells, int(sg.sup), sg.stress, sg.water, hazards.gas_of(sg)])
 	get_tree().quit(0 if ok else 1)
 
 # ---------- screenshot for the build log: godot --path . -- --shot (needs a display, e.g. xvfb-run) ----------
 func _shot() -> void:
 	var st := snap_start(Vector2(2200.0, Terrain.ground_y(2200.0)))
 	var sg := make_segment(plan_to(st, Vector2(2500.0, Terrain.ground_y(2200.0) + 90.0)))
-	for i in 2: hire()
+	for i in 2: hire(Worker.Role.MINER)
+	hire(Worker.Role.BOLTER)
 	for f in 2400:
 		Game.tick(0.05)
 		for w in workers: w.tick(0.05)
-		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05)
+		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05); hazards.tick(0.05)
 	cam.position = sg.pos(60.0); cam.zoom = Vector2(2.5, 2.5)
 	for i in 4: await get_tree().process_frame
 	await RenderingServer.frame_post_draw
@@ -460,3 +512,34 @@ func _shot() -> void:
 	get_viewport().get_texture().get_image().save_png("user://shot2.png")
 	print("SHOTS ", OS.get_user_data_dir())
 	get_tree().quit()
+
+# ---------- the manager: new headings toward coal whenever the crews are short of faces ----------
+func auto_plan() -> void:
+	var miners := workers.filter(func(w): return w.role == Worker.Role.MINER).size()
+	var open := segs.filter(func(sg): return not sg.dead and sg.prog < sg.length - 40.0 and sg.rubble.is_empty()).size()
+	var want := maxi(1, int(ceil(miners / 2.0)))
+	if open >= want or Game.money < 400.0: return
+	var starts := []
+	for sg in segs:
+		if sg.dead or not sg.done() or sg.rubble.size() > 0: continue
+		var s := 24.0
+		while s < sg.prog - 8.0:
+			starts.append({"seg": sg.id, "s": s, "pos": sg.pos(s)}); s += 26.0
+	if segs.filter(func(sg): return not sg.dead and sg.parent < 0).size() < 3:
+		for k in 8:
+			var x := Terrain.HILL + 300.0 + k * 220.0
+			if not segs.any(func(sg): return sg.parent < 0 and absf(sg.a.x - x) < 120.0):
+				starts.append({"seg": -1, "s": 0.0, "pos": Vector2(x, Terrain.ground_y(x) + Segment.R)})
+	var best := {}; var bv := 0.0
+	for st in starts:
+		for dir in [-1.0, 1.0]:
+			var ang := -0.4
+			while ang <= 0.7:
+				var pl := plan_to(st, st.pos + Vector2(cos(ang) * dir, sin(ang)) * 400.0)
+				ang += 0.1
+				if pl.is_empty() or pl.len < 60.0 or pl.tons < 30.0: continue
+				var val: float = pl.tons * Game.price - pl.cost * 14.0
+				if val > bv: bv = val; best = pl
+	if best.is_empty(): return
+	make_segment(best)
+	Game.toast.emit("The manager laid out a new %d ft heading toward about %d t of coal." % [int(best.len), int(best.tons)])

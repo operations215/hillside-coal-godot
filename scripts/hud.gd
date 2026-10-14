@@ -9,19 +9,38 @@ extends CanvasLayer
 @onready var toasts: VBoxContainer = $Toasts
 
 func _process(_dt: float) -> void:
-	var world: Node2D = get_parent()
+	var world: World = get_parent()
 	cash.text = "CASH  " + Game.money_text(Game.money)
 	pile.text = "STOCKPILE  %d t" % int(Game.pile)
 	price.text = "COAL  $%d/t" % int(Game.price)
 	var f := fmod(Game.time, Game.DAY_LEN) / Game.DAY_LEN
 	day.text = "DAY %d  %s%s" % [Game.day, ("PAUSED" if Game.paused else "%d×" % int(Game.speed)), ("  " + "▮".repeat(int(f * 10)) + "▯".repeat(10 - int(f * 10)))]
-	crew.text = "CREW  %d miners" % world.workers.size()
+	crew.text = "CREW  %d" % world.workers.size()
 
-func _on_hire() -> void:
-	var world: Node2D = get_parent()
-	if Game.spend(45.0):
-		var w: Worker = world.hire()
-		show_toast("%s joins the crew at $%d a shift." % [w.worker_name, int(w.wage)])
+func _on_hire(role: int = 0) -> void:
+	var world: World = get_parent()
+	var cost: float = Worker.ROLE_WAGE[role]
+	if Game.spend(cost):
+		var w: Worker = world.hire(role)
+		show_toast("%s joins the crew as a %s at $%d a shift." % [w.worker_name, Worker.ROLE_NAME[role], int(w.wage)])
+
+func _on_buy(key: String) -> void:
+	Game.buy(key)
+	_refresh_panel()
+
+func _ready() -> void:
+	_refresh_panel()
+
+func _refresh_panel() -> void:
+	for key in ["roof", "pump", "vent"]:
+		var b: Button = $Panel/Box.get_node(key)
+		var tier: int = Game.up.get(key, 0)
+		var next: int = tier + 1
+		if next >= Game.UPGRADES[key].size():
+			b.text = "%s: %s (top)" % [key.capitalize(), Game.UPGRADES[key][tier][0]]; b.disabled = true
+		else:
+			b.text = "%s → %s ($%d)" % [key.capitalize(), Game.UPGRADES[key][next][0], Game.UPGRADES[key][next][1]]
+			b.tooltip_text = Game.UPGRADES[key][next][2]
 
 func _on_speed(k: int) -> void:
 	if k == 0: Game.paused = not Game.paused

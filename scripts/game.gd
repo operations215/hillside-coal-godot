@@ -20,10 +20,25 @@ var piles := {}                  # other materials on the yard, by material id
 var dug_ft := 0.0
 var day_earn := 0.0
 var day_money := START_MONEY
+var up := {"roof": 0, "pump": 0, "vent": 0}
+
+const UPGRADES := {
+	"roof": [["Timber props", 0, "The crew sets posts"], ["Resin roof bolts", 1800, "Bolting 50% faster, roof holds 60% longer"], ["Bolting machine", 5000, "Twice the bolting speed, roof holds twice as long"]],
+	"pump": [["Bucket brigade", 0, "Water drains slowly"], ["Portable sump pumps", 1200, "Clears shallow water"], ["Main dewatering pump", 4000, "Keeps deep tunnels dry"]],
+	"vent": [["Natural draught", 0, "Methane builds in long tunnels"], ["Portal fan", 900, "Clears a small mine"], ["Main fan house", 3600, "Keeps a big mine under 1%"]],
+}
+
+func buy(key: String) -> bool:
+	var tier: int = up.get(key, 0) + 1
+	if tier >= UPGRADES[key].size(): return false
+	if not spend(UPGRADES[key][tier][1]): return false
+	up[key] = tier
+	toast.emit("%s: %s." % [UPGRADES[key][tier][0], UPGRADES[key][tier][2]])
+	return true
 
 func reset() -> void:
 	money = START_MONEY; earned = 0.0; time = 0.0; day = 1; price = 85.0; speed = 1.0; paused = false
-	pile = 0.0; piles = {}; dug_ft = 0.0; day_earn = 0.0; day_money = START_MONEY
+	pile = 0.0; piles = {}; dug_ft = 0.0; day_earn = 0.0; day_money = START_MONEY; up = {"roof": 0, "pump": 0, "vent": 0}
 
 func tick(dt: float) -> void:
 	time += dt

@@ -26,7 +26,8 @@ var s := 0.0
 var face_dir := 1.0
 var task := -1                    # segment being worked, -2 heading home
 var clearing := false             # a miner digging out rubble rather than coal
-var salvaging := false            # a miner pulling a dead conveyor out of a closed mine
+var salvaging := false
+var pocket: Dictionary = {}       # the rib pocket this miner is brushing out by hand            # a miner pulling a dead conveyor out of a closed mine
 var path: Array = []
 var think := 0.0
 var anim := 0.0
@@ -44,7 +45,7 @@ func status() -> String:
 	match state:
 		State.REST: return "Resting in the crew quarters"
 		State.WALK: return "Walking home" if task == -2 else "Walking to work"
-		State.DIG: return "Digging out a cave-in" if clearing else "At the face"
+		State.DIG: return "Digging out a cave-in" if clearing else ("Hand mining the rib" if not pocket.is_empty() else "At the face")
 		State.WORK: return "Pulling out the conveyor" if salvaging else ["", "Bolting the roof", "Checking the air", "Planning"][role]
 	return "Waiting for work"
 
@@ -64,7 +65,7 @@ func tick(dt: float) -> void:
 			if energy < 15.0: _go_home(); return
 			match role:
 				Role.MINER:
-					if not _find_salvage(): _find_face()
+					if not _find_salvage() and not _find_pocket(true): _find_face()
 				Role.BOLTER: _find_bolting()
 				Role.SAFETY: _find_round()
 				Role.MANAGER:
@@ -73,6 +74,7 @@ func tick(dt: float) -> void:
 
 func leave_and_idle() -> void:
 	_park_rig()
+	if not pocket.is_empty(): pocket.crew = -1; pocket = {}
 	world.leave_face(self); state = State.IDLE; think = 0.0; clearing = false; salvaging = false; path = []
 
 func _go_home() -> void:
@@ -88,9 +90,19 @@ func _park_rig() -> void:
 	if r.seg >= 0 and world.seg_alive(r.seg): world.segs[r.seg].rig = -1
 	rig = -1
 
+func _find_pocket(ordered_only: bool) -> bool:
+	if ordered_only and world.workers.filter(func(o): return not o.pocket.is_empty() and o.pocket.ord).size() >= 2: return false
+	var r: Dictionary = world.pick_pocket(self, ordered_only)
+	if r.is_empty(): return false
+	pocket = r.pk; pocket.crew = id; task = r.seg.id
+	path = world.build_path(self, task, pocket.s + World.PK_W * 0.5)
+	state = State.WALK
+	return true
+
 func _find_face() -> void:
 	var best: Segment = world.pick_face(self)
-	if best == null: return
+	if best == null:
+		_find_pocket(false); return
 	best.crew.append(id); task = best.id
 	clearing = best.rubble.size() > 0
 	if not clearing and best.rig < 0 and rig < 0:
@@ -154,7 +166,7 @@ func _walk(dt: float) -> void:
 		elif task >= 0 and world.seg_alive(task):
 			var sg: Segment = world.segs[task]
 			face_dir = 1.0 if sg.u.x >= 0 else -1.0
-			if role == Role.MINER and not salvaging: state = State.DIG
+			if role == Role.MINER and not salvaging: state = State.DIG; work_t = 0.0
 			else: state = State.WORK; work_t = 6.0 + randf() * 6.0
 		else:
 			state = State.IDLE; task = -1
@@ -164,6 +176,18 @@ func _dig(dt: float) -> void:
 		leave_and_idle(); return
 	var sg: Segment = world.segs[task]
 	var H = world.hazards
+	if not pocket.is_empty():
+		if H.flooded(sg) or H.gas_out(sg) or sg.rubble.size() > 0 or world.mine_closed(sg): leave_and_idle(); return
+		var stand: float = pocket.s + World.PK_W * 0.5
+		position = position.lerp(sg.floor_pos(stand), minf(1.0, dt * 4.0)); seg = sg.id; s = stand
+		work_t -= dt
+		if work_t <= 0.0:
+			work_t = 0.7 / skill
+			if not world.brush(sg, pocket):
+				sg.pockets.erase(pocket); leave_and_idle(); return
+		energy -= dt * 0.9
+		if energy < 10.0: _go_home()
+		return
 	if clearing:
 		if sg.rubble.is_empty(): leave_and_idle(); return
 		var stand: float = maxf(0.0, sg.rubble[0] - 4.0 - 7.0 * maxi(0, sg.crew.find(id)))
@@ -293,6 +317,7 @@ func _draw() -> void:
 	var swing := sin(q) * 0.45 if walking else 0.0
 	var t := pow((sin(q) + 1.0) * 0.5, 1.4) if digging else 0.0
 	var up := 1.15 + 1.75 * t
+	if digging and not pocket.is_empty() and pocket.side < 0: up = 2.6 + 0.5 * t
 	if role == Role.BOLTER and digging: up = 2.6 + sin(anim * 40.0) * 0.05
 	var arm_a := up if digging else (0.3 + swing)
 	var hand := shoulder + Vector2(sin(arm_a) * 6.5 * f, cos(arm_a) * 6.5)

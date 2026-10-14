@@ -60,7 +60,7 @@ text = "3×"
 offset_left = 930.0
 offset_top = 50.0
 offset_right = 1388.0
-offset_bottom = 400.0
+offset_bottom = 470.0
 
 [node name="Box" type="VBoxContainer" parent="HUD/Panel"]
 layout_mode = 2
@@ -92,6 +92,14 @@ text = "New tunnels: conveyor"
 [node name="Car" type="Button" parent="HUD/Panel/Box"]
 layout_mode = 2
 text = "Buy shuttle car ($1,200)"
+
+[node name="Scoop" type="Button" parent="HUD/Panel/Box"]
+layout_mode = 2
+text = "Buy scoop ($800)"
+
+[node name="Hand" type="Button" parent="HUD/Panel/Box"]
+layout_mode = 2
+text = "Hand mining orders"
 
 [node name="Rig" type="Button" parent="HUD/Panel/Box"]
 layout_mode = 2
@@ -144,3 +152,5 @@ offset_bottom = 300.0
 [connection signal="pressed" from="HUD/Panel/Box/Rig" to="HUD" method="_on_rig"]
 [connection signal="pressed" from="HUD/Panel/Box/Belt" to="HUD" method="_on_belt"]
 [connection signal="pressed" from="HUD/Panel/Box/Car" to="HUD" method="_on_car"]
+[connection signal="pressed" from="HUD/Panel/Box/Scoop" to="HUD" method="_on_scoop"]
+[connection signal="pressed" from="HUD/Panel/Box/Hand" to="HUD" method="_on_hand"]

@@ -5,6 +5,9 @@ extends Node2D
 const COST := 1200.0
 const CAP := 40                   # cells a load
 const SPEED := 55.0
+const SCOOP_COST := 800.0
+
+var kind := "car"                # car or scoop
 
 var id := -1
 var seg := -1                     # tunnel it is in
@@ -32,11 +35,11 @@ func tick(dt: float) -> void:
 				for it in world.items:
 					if it[0] == sg.id and it[4]: n += 1
 				if n > bn: bn = n; best = sg.id
-			if best >= 0 and bn >= 6:
+			if best >= 0 and bn >= (3 if kind == "scoop" else 6):
 				task = best; seg = best; s = 0.0; state = "in"
 		"in":
 			var sg: Segment = world.segs[task]
-			s = minf(sg.prog - 16.0, s + SPEED * dt); dir = 1.0
+			s = minf(sg.prog - 16.0, s + SPEED * (1.4 if kind == "scoop" else 1.0) * dt); dir = 1.0
 			position = sg.floor_pos(s) - sg.n * 1.0; rotation = sg.u.angle()
 			if s >= sg.prog - 16.0: state = "load"; t = 0.0
 		"load":
@@ -47,14 +50,14 @@ func tick(dt: float) -> void:
 				var took := 0
 				var keep := []
 				for it in world.items:
-					if it[0] == task and it[4] and took < 4 and cargo.size() < CAP:
+					if it[0] == task and it[4] and took < 4 and cargo.size() < (CAP / 3 if kind == "scoop" else CAP):
 						cargo.append(it); took += 1
 					else: keep.append(it)
 				world.items = keep
-				if took == 0 or cargo.size() >= CAP: state = "out"
+				if took == 0 or cargo.size() >= (CAP / 3 if kind == "scoop" else CAP): state = "out"
 		"out":
 			var sg: Segment = world.segs[task]
-			s = maxf(0.0, s - SPEED * dt); dir = -1.0
+			s = maxf(0.0, s - SPEED * (1.4 if kind == "scoop" else 1.0) * dt); dir = -1.0
 			position = sg.floor_pos(s) - sg.n * 1.0; rotation = sg.u.angle()
 			if s <= 0.0: state = "dump"; t = 0.0
 		"dump":
@@ -71,6 +74,16 @@ func tick(dt: float) -> void:
 	queue_redraw()
 
 func _draw() -> void:
+	if kind == "scoop":
+		draw_rect(Rect2(-9.0, -6.0, 18.0, 5.0), Color("d9a21a"))
+		draw_rect(Rect2(-9.0, -6.0, 18.0, 1.0), Color("1d1c20"))
+		draw_rect(Rect2(-6.0 * dir - 2.0, -9.5, 4.0, 3.5), Color("2a2a30"))
+		for wx in [-5.0, 5.0]: draw_circle(Vector2(wx, -1.0), 2.4, Color("1a1a1e"))
+		var bx := 9.0 * dir
+		draw_line(Vector2(bx, -5.0), Vector2(bx + 5.0 * dir, -2.0), Color("8a8f96"), 1.5)
+		draw_rect(Rect2(bx + (2.0 if dir > 0 else -8.0), -3.0, 6.0, 3.0), Color("6a6f76"))
+		if cargo.size() > 0: draw_rect(Rect2(bx + (2.0 if dir > 0 else -8.0), -5.0, 6.0, 2.0), Color("1d1c20"))
+		return
 	draw_rect(Rect2(-16.0, -6.0, 32.0, 5.5), Color("e0a51c"))
 	draw_rect(Rect2(-16.0, -6.0, 32.0, 1.0), Color("1d1c20"))
 	draw_rect(Rect2(14.0 * dir - (0.0 if dir > 0 else 5.0), -9.5, 5.0, 3.5), Color("2a2a30"))

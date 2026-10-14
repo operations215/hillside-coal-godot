@@ -26,7 +26,11 @@ var cars: Array = []
 var plan_belt := true
 var view_filter := 0              # 0 normal, 1 gas, 2 fire, 3 roof, 4 water, 5 air
 const FILTERS := ["Normal view", "Methane", "Fire risk", "Roof", "Water", "Air supply"]
-var night: Night             # new tunnels get a conveyor, or go bare for shuttle cars
+var night: Night
+var hand_mode := false            # dragging along a tunnel orders hand mining of its ribs
+var hand_drag := {}               # {seg, s0, s1}
+var brushed := 0                  # cells taken out of the ribs by hand, lifetime
+const PK_W := 8.0             # new tunnels get a conveyor, or go bare for shuttle cars
 var shake := 0.0
 var plan_wait := 0.0
 
@@ -64,6 +68,12 @@ func buy_car() -> void:
 	var c := Car.new(); c.id = cars.size(); c.world = self; c.position = Vector2(1120.0 + cars.size() * 40.0, 0.0)
 	cars.append(c); add_child(c)
 	Game.toast.emit("A shuttle car is delivered. It hauls from any tunnel driven without a conveyor back to the belt.")
+
+func buy_scoop() -> void:
+	if not Game.spend(Car.SCOOP_COST): return
+	var c := Car.new(); c.id = cars.size(); c.world = self; c.kind = "scoop"; c.position = Vector2(1100.0 + cars.size() * 40.0, 0.0)
+	cars.append(c); add_child(c)
+	Game.toast.emit("A scoop is delivered. It is quick and cheap but carries a third of a shuttle car's load.")
 
 func buy_rig() -> void:
 	if not Game.spend(Rig.COST): return
@@ -119,6 +129,76 @@ func filter_value(sg: Segment) -> float:
 		4: return clampf(sg.water / 0.75, 0.0, 1.0)
 		5: return clampf((sg.pt + sg.prog) / (260.0 * (1.0 + 1.2 * float(Game.up.get("vent", 0)))), 0.0, 1.0)
 	return 0.0
+
+## Coal the machine missed: look along both ribs of what has been driven and note where the seam runs on.
+func rib_scan(sg: Segment, all: bool, s_from: float = -1.0, s_to: float = -1.0) -> int:
+	var made := 0
+	var s: float = sg.scanned if s_from < 0.0 else floorf(s_from / PK_W) * PK_W
+	var stop: float = (sg.carved - 6.0) if s_to < 0.0 else minf(sg.carved - 2.0, s_to)
+	while s + PK_W <= stop + 0.01:
+		for side in [-1.0, 1.0]:
+			if sg.pockets.any(func(pk): return absf(pk.s - s) < 0.5 and pk.side == side): continue
+			var n := _rib_coal(sg, s, side)
+			if n >= (1 if all else 4):
+				sg.pockets.append({"s": s, "side": side, "left": n, "ord": all, "crew": -1})
+				made += 1
+		s += PK_W
+	if s_from < 0.0: sg.scanned = maxf(sg.scanned, s)
+	return made
+
+func _rib_coal(sg: Segment, s: float, side: float) -> int:
+	var n := 0
+	var c: Vector2 = sg.pos(s + PK_W * 0.5) + sg.n * side * (Segment.R + 7.0)
+	var dx := -PK_W * 0.5 + 2.0
+	while dx < PK_W * 0.5:
+		var dy := -6.0
+		while dy <= 6.0:
+			var p: Vector2 = c + sg.u * dx + sg.n * dy
+			if not terrain.is_dug(p.x, p.y) and terrain.mat_world(p.x, p.y) == Mats.COAL: n += 1
+			dy += Terrain.C
+		dx += Terrain.C
+	return n
+
+## One stroke of the pick into a pocket: the nearest undug coal cell beside the tunnel comes out onto the belt.
+func brush(sg: Segment, pk: Dictionary) -> bool:
+	var c: Vector2 = sg.pos(pk.s + PK_W * 0.5) + sg.n * pk.side * (Segment.R + 7.0)
+	var best := Vector2.INF; var bd := INF
+	var dx := -PK_W * 0.5 + 2.0
+	while dx < PK_W * 0.5:
+		var dy := -6.0
+		while dy <= 6.0:
+			var p: Vector2 = c + sg.u * dx + sg.n * dy
+			if not terrain.is_dug(p.x, p.y) and terrain.mat_world(p.x, p.y) == Mats.COAL:
+				var d := absf(dy - (-7.0) * pk.side)
+				if d < bd: bd = d; best = p
+			dy += Terrain.C
+		dx += Terrain.C
+	if best == Vector2.INF:
+		pk.left = 0; return false
+	for cell in terrain.carve(best.x, best.y, sg.u, 1.5, 1.5):
+		items.append([sg.id, pk.s, cell[0], Mats.tons(cell[0]), not sg.has_belt])
+		if cell[0] == Mats.COAL: sg.coal_cells += 1
+	pk.left -= 1; brushed += 1
+	fx.puff(best, Vector2(randf_range(-6, 6), randf_range(-6, 2)), 0.5, 1.0, Color(0.1, 0.1, 0.1, 0.8), "bit")
+	return pk.left > 0
+
+func pick_pocket(w: Worker, ordered_only: bool) -> Dictionary:
+	var best := {}; var bs := INF
+	for sg in segs:
+		if sg.dead or mine_closed(sg) or hazards.flooded(sg) or hazards.gas_out(sg) or sg.rubble.size() > 0: continue
+		for pk in sg.pockets:
+			if pk.crew >= 0 or pk.left <= 0 or (ordered_only and not pk.ord): continue
+			var sc: float = sg.floor_pos(pk.s).distance_to(w.position) - (3000.0 if pk.ord else 0.0)
+			if sc < bs: bs = sc; best = {"seg": sg, "pk": pk}
+	return best
+
+## Mark a stretch of tunnel for hand mining: every bit of coal in those ribs gets dug out by hand.
+func order_hand(sg: Segment, s0: float, s1: float) -> int:
+	var lo := minf(s0, s1); var hi := maxf(s0, s1)
+	var n := rib_scan(sg, true, lo, hi)
+	for pk in sg.pockets:
+		if pk.s >= lo - PK_W and pk.s <= hi and pk.left > 0 and not pk.ord: pk.ord = true; n += 1
+	return n
 
 func mine_no(sg: Segment) -> int:
 	var root := sg.root_of(segs)
@@ -280,6 +360,7 @@ func advance(sg: Segment, ds: float) -> void:
 			if m == Mats.COAL: sg.coal_cells += 1
 			items.append([sg.id, sg.carved, m, Mats.tons(m), not sg.has_belt])
 	if sg.has_belt: sg.belt = maxf(sg.belt, sg.prog - 4.0)
+	rib_scan(sg, false)
 	Game.pay(-COST_PER_FT * (sg.prog - old))
 	Game.dug_ft += sg.prog - old
 
@@ -360,7 +441,17 @@ func _process(delta: float) -> void:
 func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventMouseButton:
 		var p := get_global_mouse_position()
-		if e.button_index == MOUSE_BUTTON_LEFT:
+		if e.button_index == MOUSE_BUTTON_LEFT and hand_mode:
+			if e.pressed:
+				var ns := nearest_seg(p, 26.0)
+				if not ns.is_empty():
+					hand_drag = {"seg": ns.seg, "s0": ns.s, "s1": ns.s}
+					get_viewport().set_input_as_handled()
+			elif not hand_drag.is_empty():
+				var n := order_hand(hand_drag.seg, hand_drag.s0, hand_drag.s1)
+				hud.show_toast("%d rib pockets marked for hand mining in mine No.%d." % [n, mine_no(hand_drag.seg)] if n > 0 else "No coal in those ribs worth a pick.")
+				hand_drag = {}
+		elif e.button_index == MOUSE_BUTTON_LEFT:
 			if e.pressed:
 				var st := snap_start(p)
 				if not st.is_empty():
@@ -377,7 +468,10 @@ func _unhandled_input(e: InputEvent) -> void:
 		elif e.button_index == MOUSE_BUTTON_WHEEL_DOWN and e.pressed: cam.zoom_at(p, 1.0 / 1.15)
 	elif e is InputEventMouseMotion:
 		hover = get_global_mouse_position()
-		if not drag_start.is_empty():
+		if not hand_drag.is_empty():
+			var sgh: Segment = hand_drag.seg
+			hand_drag.s1 = clampf((hover - sgh.a).dot(sgh.u), 0.0, sgh.prog)
+		elif not drag_start.is_empty():
 			drag_plan = plan_to(drag_start, hover)
 		elif e.button_mask & (MOUSE_BUTTON_MASK_LEFT | MOUSE_BUTTON_MASK_MIDDLE | MOUSE_BUTTON_MASK_RIGHT):
 			cam.position -= e.relative / cam.zoom.x
@@ -412,6 +506,19 @@ func _draw() -> void:
 			p = Vector2(HEAD_X, -118.0).lerp(Vector2(root.a.x, Terrain.ground_y(root.a.x) - 6.0), t)
 		draw_rect(Rect2(p.x - 1.4, p.y - 2.8, 2.8, 2.8), Mats.COLORS[it[2]].lightened(0.15))
 	for t in trucks: _draw_truck(t)
+	for sg in segs:
+		if sg.dead: continue
+		for pk in sg.pockets:
+			if pk.left <= 0: continue
+			var c: Vector2 = sg.pos(pk.s + PK_W * 0.5) + sg.n * pk.side * (Segment.R + 3.0)
+			if pk.ord:
+				_dashed_box(c, sg.u, sg.n, PK_W * 0.5, 6.0, Color("f2b705"))
+			else:
+				for k in 3: draw_rect(Rect2(c.x - 3.0 + k * 2.6, c.y - 1.0 + fposmod(pk.s * 1.7 + k, 2.0), 1.4, 1.4), Color("1d1c20").lightened(0.5))
+	if not hand_drag.is_empty():
+		var sgh: Segment = hand_drag.seg
+		var lo := minf(hand_drag.s0, hand_drag.s1); var hi := maxf(hand_drag.s0, hand_drag.s1)
+		_dashed_box(sgh.pos((lo + hi) * 0.5), sgh.u, sgh.n, (hi - lo) * 0.5, Segment.R + 10.0, Color("f2b705"))
 	if view_filter > 0:
 		var fc: Color = [Color.WHITE, Color(0.55, 0.95, 0.35), Color(1.0, 0.5, 0.15), Color(1.0, 0.25, 0.2), Color(0.3, 0.6, 1.0), Color(0.4, 0.9, 0.95)][view_filter]
 		for sg in segs:
@@ -429,6 +536,16 @@ func _draw() -> void:
 	else:
 		var st := snap_start(hover)
 		if not st.is_empty(): draw_arc(st.pos, 6.0, 0.0, TAU, 24, Color(0.95, 0.72, 0.02, 0.95), 1.5)
+
+func _dashed_box(c: Vector2, u: Vector2, n: Vector2, hw: float, hh: float, col: Color) -> void:
+	var ph := fmod(Game.time * 6.0, 6.0)
+	var corners := [c - u * hw - n * hh, c + u * hw - n * hh, c + u * hw + n * hh, c - u * hw + n * hh]
+	for k in 4:
+		var a: Vector2 = corners[k]; var b: Vector2 = corners[(k + 1) % 4]
+		var L := a.distance_to(b); var d := (b - a) / maxf(L, 0.01)
+		var t := ph - 6.0
+		while t < L:
+			draw_line(a + d * clampf(t, 0.0, L), a + d * clampf(t + 3.0, 0.0, L), col, 1.2); t += 6.0
 
 func _root_for_overland(it: Array) -> Segment:
 	# overland items carry no root; use the nearest portal by remaining distance (good enough for one mine, refined later)
@@ -652,6 +769,7 @@ func _smoke() -> void:
 		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05); hazards.tick(0.05); fx.tick(0.05)
 		frames += 1
 		if frames == 2400 and sg2: decommission(sg2); salvage(sg2)
+		if frames == 900: print("hand order: %d pockets (had %d)" % [order_hand(sg, 20.0, 110.0), sg.pockets.size()])
 		if frames % 600 == 0:
 			var ws := ""
 			for w in workers: ws += "%d:%s/%d/%d/%.0f " % [w.role, ["I","W","D","K","R"][w.state], w.task, w.path.size(), w.energy]
@@ -660,6 +778,8 @@ func _smoke() -> void:
 	if sold_tons <= 0.0 and Game.pile <= 0.0 and items.size() == 0: ok = false; print("FAIL: nothing came out")
 	print("RESULT %s prog=%d money=%d sold=%.1f coalcells=%d sup=%d stress=%.2f water=%.2f gas=%.2f rig=%d car=%s rock=%s" % [("OK" if ok else "FAIL"), int(sg.prog), int(Game.money), sold_tons, sg.coal_cells, int(sg.sup), sg.stress, sg.water, hazards.gas_of(sg), sg.rig, ("%s/%d/h%d prog=%d" % [cars[0].state, cars[0].cargo.size(), cars[0].hauled, int(sg3.prog)]) if sg3 else "none", ("%d/%d soft=%s bp=%d decom=%s belt=%.0f salv=%s" % [int(sg2.prog), int(sg2.length), sg2.soft, sg2.bp, sg2.decom, sg2.belt, sg2.salvage]) if sg2 else "none"])
 	if sg2 and sg2.belt > 1.0: ok = false; print("FAIL: belt not salvaged")
+	print("pockets=%d brushed=%d" % [sg.pockets.size(), brushed])
+	if brushed < 5: ok = false; print("FAIL: ribs never brushed")
 	get_tree().quit(0 if ok else 1)
 
 # ---------- screenshot for the build log: godot --path . -- --shot (needs a display, e.g. xvfb-run) ----------
@@ -682,6 +802,7 @@ func _shot() -> void:
 	for i in 6: hire(Worker.Role.MINER)
 	hire(Worker.Role.BOLTER)
 	for f in 2400:
+		if f == 2100: order_hand(sg, 20.0, 150.0); buy_scoop()
 		Game.tick(0.05)
 		for w in workers: w.tick(0.05)
 		for c in cars: c.tick(0.05)
@@ -718,6 +839,15 @@ func _shot() -> void:
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png("user://shot7.png")
 	view_filter = 0; hud.view.select(0); hud.view.item_selected.emit(0)
+	var hp: Vector2 = sg.pos(60.0)
+	for s5 in segs:
+		if not s5.pockets.is_empty(): hp = s5.pos(s5.pockets[0].s + 4.0); break
+	for w in workers:
+		if not w.pocket.is_empty(): hp = w.position + Vector2(0, -6.0); break
+	cam.position = hp; cam.zoom = Vector2(3.2, 3.2)
+	for i in 4: await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("user://shot8.png")
 	if cars.size() > 0 and cars[0].task >= 0:
 		cam.position = cars[0].position; cam.zoom = Vector2(3.0, 3.0)
 		for i in 4: await get_tree().process_frame

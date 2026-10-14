@@ -26,6 +26,15 @@ func _on_hire(role: int = 0) -> void:
 		var w: Worker = world.hire(role)
 		show_toast("%s joins the crew as a %s at $%d a shift." % [w.worker_name, Worker.ROLE_NAME[role], int(w.wage)])
 
+func _on_scoop() -> void:
+	get_parent().buy_scoop()
+
+func _on_hand() -> void:
+	var world: World = get_parent()
+	world.hand_mode = not world.hand_mode
+	$Panel/Box/Hand.text = "Hand mining: drag along a tunnel" if world.hand_mode else "Hand mining orders"
+	if world.hand_mode: show_toast("Drag along a tunnel to mark its ribs for hand mining. Free miners dig out the coal the machine missed.")
+
 func _on_car() -> void:
 	get_parent().buy_car()
 

@@ -22,6 +22,8 @@ var toasts: Array = []
 var hazards: Hazards
 var fx := FX.new()
 var rigs: Array = []
+var cars: Array = []
+var plan_belt := true             # new tunnels get a conveyor, or go bare for shuttle cars
 var shake := 0.0
 var plan_wait := 0.0
 
@@ -52,6 +54,12 @@ func hire(role: int) -> Worker:
 func has_role(name: String) -> bool:
 	var r := Worker.ROLE_NAME.find(name) if name != "safety" else Worker.Role.SAFETY
 	return workers.any(func(w): return w.role == r)
+
+func buy_car() -> void:
+	if not Game.spend(Car.COST): return
+	var c := Car.new(); c.id = cars.size(); c.world = self; c.position = Vector2(1120.0 + cars.size() * 40.0, 0.0)
+	cars.append(c); add_child(c)
+	Game.toast.emit("A shuttle car is delivered. It hauls from any tunnel driven without a conveyor back to the belt.")
 
 func buy_rig() -> void:
 	if not Game.spend(Rig.COST): return
@@ -170,7 +178,7 @@ func snap_start(p: Vector2) -> Dictionary:
 	var n := nearest_seg(p, Segment.R + 6.0)
 	if not n.is_empty():
 		return {"seg": n.seg.id, "s": n.s, "pos": n.seg.pos(n.s)}
-	if p.x > Terrain.HILL + 60.0 and absf(p.y - Terrain.ground_y(p.x)) < 18.0:
+	if p.x > Terrain.HILL - 200.0 and absf(p.y - Terrain.ground_y(p.x)) < 18.0:
 		return {"seg": -1, "s": 0.0, "pos": Vector2(p.x, Terrain.ground_y(p.x) + Segment.R)}
 	return {}
 
@@ -182,6 +190,7 @@ func plan_to(st: Dictionary, p: Vector2) -> Dictionary:
 	if L < 24.0: return {}
 	var u := dir / dir.length()
 	if st.seg < 0 and u.y < 0.12: return {}      # a portal has to go into the hill, not up into the air
+	if st.seg < 0 and absf(u.x) < 0.4: u = Vector2(0, 1)   # a near-vertical start becomes a true shaft
 	var tons := 0.0; var cells := 0
 	var s := 0.0
 	while s < L:
@@ -209,6 +218,7 @@ func make_segment(pl: Dictionary) -> Segment:
 	var sg := Segment.new()
 	sg.id = segs.size()
 	sg.setup(pl.a, pl.b, pl.parent, pl.pt)
+	sg.has_belt = plan_belt or sg.is_shaft()
 	segs.append(sg)
 	return sg
 
@@ -226,8 +236,8 @@ func advance(sg: Segment, ds: float) -> void:
 		for cell in terrain.carve(p.x, p.y, sg.u, Segment.R * 0.9, Segment.R):
 			var m: int = cell[0]
 			if m == Mats.COAL: sg.coal_cells += 1
-			items.append([sg.id, sg.carved, m, Mats.tons(m)])
-	sg.belt = maxf(sg.belt, sg.prog - 4.0)
+			items.append([sg.id, sg.carved, m, Mats.tons(m), not sg.has_belt])
+	if sg.has_belt: sg.belt = maxf(sg.belt, sg.prog - 4.0)
 	Game.pay(-COST_PER_FT * (sg.prog - old))
 	Game.dug_ft += sg.prog - old
 
@@ -235,9 +245,10 @@ func advance(sg: Segment, ds: float) -> void:
 func _tick_items(dt: float) -> void:
 	var keep := []
 	for it in items:
+		if it[4]: keep.append(it); continue
 		if it[0] >= 0:
 			var sg: Segment = segs[it[0]]
-			it[1] -= BELT_SPEED * dt
+			it[1] -= BELT_SPEED * (3.0 if sg.is_shaft() else 1.0) * dt
 			if it[1] <= 0.0:
 				if sg.parent >= 0:
 					it[0] = sg.parent; it[1] = sg.pt
@@ -296,6 +307,7 @@ func _process(delta: float) -> void:
 			var sub := dt / steps
 			Game.tick(sub)
 			for w in workers: w.tick(sub)
+			for c in cars: c.tick(sub)
 			_tick_items(sub); _tick_trucks(sub); _tick_wages(sub); hazards.tick(sub); fx.tick(sub)
 	shake = maxf(0.0, shake - delta)
 	cam.offset = Vector2(randf_range(-6, 6), randf_range(-6, 6)) * shake if shake > 0.0 else Vector2.ZERO
@@ -337,12 +349,17 @@ func _draw() -> void:
 		_draw_tunnel(sg)
 	for sg in segs:
 		if sg.dead or sg.parent >= 0 or sg.prog < 0.5: continue
-		_draw_portal(sg)
+		if sg.is_shaft(): _draw_headframe(sg)
+		else: _draw_portal(sg)
 		_draw_gantry(sg)
 	# material riding the belts
 	for it in items:
 		var p: Vector2
-		if it[0] >= 0:
+		if it[4]:
+			var sgw: Segment = segs[it[0]]
+			var k: int = hash(it) % 100
+			p = sgw.floor_pos(maxf(0.0, sgw.prog - 3.0 - (k % 10) * 1.6)) - sgw.n * (1.0 + (k / 10) * 1.2)
+		elif it[0] >= 0:
 			var sg: Segment = segs[it[0]]
 			p = sg.floor_pos(it[1]) - sg.n * 2.0
 		else:
@@ -383,7 +400,10 @@ func _draw_tunnel(sg: Segment) -> void:
 		draw_line(sg.pos(s), sg.pos(minf(sg.prog, s + 4.0)), Mats.COLORS[m].darkened(0.55), Segment.R * 2.0)
 		s += 4.0
 	# the conveyor along the floor
-	if sg.belt > 1.0:
+	if sg.is_shaft():
+		draw_line(sg.pos(0.0) - sg.n * 7.0, b - sg.n * 7.0, Color("5a5d63"), 1.0)
+		draw_line(sg.pos(0.0) + sg.n * 7.0, b + sg.n * 7.0, Color("5a5d63"), 1.0)
+	elif sg.has_belt and sg.belt > 1.0:
 		var f0 := sg.floor_pos(0.0); var f1 := sg.floor_pos(sg.belt)
 		draw_line(f0, f1, Color("2a2a2e"), 2.2)
 		var k := 0.0
@@ -442,6 +462,27 @@ func _draw_portal(sg: Segment) -> void:
 	draw_rect(Rect2(x - 7.0, gy - 26.0, 14.0, 28.0), Color("6b4a2c"))
 	draw_rect(Rect2(x - 5.0, gy - 23.0, 10.0, 25.0), Color("0d0a08"))
 	_sign(Vector2(x + o * 10.0, gy - 36.0), "MINE No.%d" % mine_no(sg))
+
+func _draw_headframe(sg: Segment) -> void:
+	var x := sg.a.x; var gy := Terrain.ground_y(x)
+	# an A-frame headframe with the sheave wheel on top and the hoist house beside it
+	draw_line(Vector2(x - 16.0, gy), Vector2(x, gy - 58.0), Color("3a3d44"), 3.0)
+	draw_line(Vector2(x + 16.0, gy), Vector2(x, gy - 58.0), Color("3a3d44"), 3.0)
+	draw_line(Vector2(x + 30.0, gy), Vector2(x + 2.0, gy - 56.0), Color("4a4f55"), 2.0)
+	for k in 4: draw_line(Vector2(x - 12.0 + k * 3.0, gy - 10.0 - k * 12.0), Vector2(x + 12.0 - k * 3.0, gy - 10.0 - k * 12.0), Color("4a4f55"), 1.2)
+	draw_circle(Vector2(x, gy - 58.0), 6.0, Color("2f3238")); draw_circle(Vector2(x, gy - 58.0), 2.0, Color("8a8f96"))
+	draw_rect(Rect2(x + 26.0, gy - 18.0, 26.0, 18.0), Color("8c6640")); draw_rect(Rect2(x + 24.0, gy - 21.0, 30.0, 4.0), Color("4a3a2a"))
+	draw_line(Vector2(x + 2.0, gy - 58.0), Vector2(x + 40.0, gy - 18.0), Color("1d1c20"), 1.0)
+	# the cage on its rope, running the shaft
+	var depth: float = sg.prog
+	var cs := fposmod(Game.time * 25.0, maxf(2.0, depth * 2.0))
+	if cs > depth: cs = depth * 2.0 - cs
+	var cp := sg.pos(cs)
+	draw_line(Vector2(x, gy - 58.0), cp + Vector2(0, -8.0), Color("1d1c20"), 1.0)
+	draw_rect(Rect2(cp.x - 7.0, cp.y - 8.0, 14.0, 12.0), Color("e0a51c"))
+	draw_rect(Rect2(cp.x - 6.0, cp.y - 7.0, 12.0, 10.0), Color(0.1, 0.1, 0.12))
+	for k in 3: draw_line(Vector2(cp.x - 6.0, cp.y - 5.0 + k * 3.0), Vector2(cp.x + 6.0, cp.y - 5.0 + k * 3.0), Color("e0a51c"), 0.8)
+	_sign(Vector2(x - 26.0, gy - 24.0), "SHAFT No.%d" % mine_no(sg))
 
 func _draw_gantry(sg: Segment) -> void:
 	# the overland conveyor from the portal down to the head tower above the stockpile
@@ -538,6 +579,12 @@ func _smoke() -> void:
 	var st2 := snap_start(Vector2(2600.0, Terrain.ground_y(2600.0)))
 	var pl2 := plan_to(st2, Vector2(2800.0, Terrain.ground_y(2600.0) + 330.0))
 	var sg2: Segment = make_segment(pl2) if not pl2.is_empty() else null
+	plan_belt = false
+	var st3 := {"seg": sg.id, "s": 120.0, "pos": sg.pos(120.0)}
+	var pl3 := plan_to(st3, sg.pos(120.0) + Vector2(-200.0, 60.0))
+	var sg3: Segment = make_segment(pl3) if not pl3.is_empty() else null
+	plan_belt = true
+	buy_car()
 	for i in 5: hire(Worker.Role.MINER)
 	hire(Worker.Role.BOLTER)
 	var frames := 0
@@ -545,6 +592,7 @@ func _smoke() -> void:
 	while frames < 6000 and Game.day < 4:
 		Game.tick(0.05)
 		for w in workers: w.tick(0.05)
+		for c in cars: c.tick(0.05)
 		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05); hazards.tick(0.05); fx.tick(0.05)
 		frames += 1
 		if frames % 600 == 0:
@@ -553,7 +601,7 @@ func _smoke() -> void:
 			print("t=%d prog=%d/%d crew=%s items=%d pile=%.1f money=%d sold=%.1f  %s" % [int(Game.time), int(sg.prog), int(sg.length), str(sg.crew), items.size(), Game.pile, int(Game.money), sold_tons, ws])
 	if sg.prog < 40.0: ok = false; print("FAIL: face barely moved")
 	if sold_tons <= 0.0 and Game.pile <= 0.0 and items.size() == 0: ok = false; print("FAIL: nothing came out")
-	print("RESULT %s prog=%d money=%d sold=%.1f coalcells=%d sup=%d stress=%.2f water=%.2f gas=%.2f rig=%d rock=%s" % [("OK" if ok else "FAIL"), int(sg.prog), int(Game.money), sold_tons, sg.coal_cells, int(sg.sup), sg.stress, sg.water, hazards.gas_of(sg), sg.rig, ("%d/%d soft=%s bp=%d" % [int(sg2.prog), int(sg2.length), sg2.soft, sg2.bp]) if sg2 else "none"])
+	print("RESULT %s prog=%d money=%d sold=%.1f coalcells=%d sup=%d stress=%.2f water=%.2f gas=%.2f rig=%d car=%s rock=%s" % [("OK" if ok else "FAIL"), int(sg.prog), int(Game.money), sold_tons, sg.coal_cells, int(sg.sup), sg.stress, sg.water, hazards.gas_of(sg), sg.rig, ("%s/%d/h%d prog=%d" % [cars[0].state, cars[0].cargo.size(), cars[0].hauled, int(sg3.prog)]) if sg3 else "none", ("%d/%d soft=%s bp=%d" % [int(sg2.prog), int(sg2.length), sg2.soft, sg2.bp]) if sg2 else "none"])
 	get_tree().quit(0 if ok else 1)
 
 # ---------- screenshot for the build log: godot --path . -- --shot (needs a display, e.g. xvfb-run) ----------
@@ -564,11 +612,21 @@ func _shot() -> void:
 	var st2 := snap_start(Vector2(2600.0, Terrain.ground_y(2600.0)))
 	var pl2 := plan_to(st2, Vector2(2800.0, Terrain.ground_y(2600.0) + 330.0))
 	if not pl2.is_empty(): make_segment(pl2)
-	for i in 4: hire(Worker.Role.MINER)
+	# a bare branch for a shuttle car, and a shaft sunk from the hilltop
+	plan_belt = false
+	var pl3 := plan_to({"seg": sg.id, "s": 100.0, "pos": sg.pos(100.0)}, sg.pos(100.0) + Vector2(-220.0, 50.0))
+	if not pl3.is_empty(): make_segment(pl3)
+	plan_belt = true
+	buy_car()
+	var st4 := snap_start(Vector2(1900.0, Terrain.ground_y(1900.0)))
+	var pl4 := plan_to(st4, Vector2(1905.0, Terrain.ground_y(1900.0) + 240.0))
+	var sg4: Segment = make_segment(pl4) if not pl4.is_empty() else null
+	for i in 6: hire(Worker.Role.MINER)
 	hire(Worker.Role.BOLTER)
 	for f in 2400:
 		Game.tick(0.05)
 		for w in workers: w.tick(0.05)
+		for c in cars: c.tick(0.05)
 		_tick_items(0.05); _tick_trucks(0.05); _tick_wages(0.05); hazards.tick(0.05); fx.tick(0.05)
 	cam.position = sg.pos(60.0); cam.zoom = Vector2(2.5, 2.5)
 	for i in 4: await get_tree().process_frame
@@ -584,6 +642,16 @@ func _shot() -> void:
 		for i in 4: await get_tree().process_frame
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png("user://shot3.png")
+	if sg4:
+		cam.position = sg4.pos(20.0) + Vector2(0, -30.0); cam.zoom = Vector2(2.2, 2.2)
+		for i in 4: await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("user://shot4.png")
+	if cars.size() > 0 and cars[0].task >= 0:
+		cam.position = cars[0].position; cam.zoom = Vector2(3.0, 3.0)
+		for i in 4: await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("user://shot5.png")
 	print("SHOTS ", OS.get_user_data_dir())
 	get_tree().quit()
 

@@ -8,8 +8,10 @@ extends CanvasLayer
 @onready var crew: Label = $Top/Crew
 @onready var toasts: VBoxContainer = $Toasts
 
-func _process(_dt: float) -> void:
+func _process(dt: float) -> void:
 	var world: World = get_parent()
+	_info_t -= dt
+	if _info_t <= 0.0: _info_t = 1.0; _refresh_info()
 	cash.text = "CASH  " + Game.money_text(Game.money)
 	pile.text = "STOCKPILE  %d t" % int(Game.pile)
 	price.text = "COAL  $%d/t" % int(Game.price)
@@ -23,6 +25,14 @@ func _on_hire(role: int = 0) -> void:
 	if Game.spend(cost):
 		var w: Worker = world.hire(role)
 		show_toast("%s joins the crew as a %s at $%d a shift." % [w.worker_name, Worker.ROLE_NAME[role], int(w.wage)])
+
+func _on_car() -> void:
+	get_parent().buy_car()
+
+func _on_belt() -> void:
+	var world: World = get_parent()
+	world.plan_belt = not world.plan_belt
+	$Panel/Box/Belt.text = "New tunnels: conveyor" if world.plan_belt else "New tunnels: bare (shuttle cars)"
 
 func _on_rig() -> void:
 	get_parent().buy_rig()
@@ -48,6 +58,31 @@ func _refresh_panel() -> void:
 func _on_speed(k: int) -> void:
 	if k == 0: Game.paused = not Game.paused
 	else: Game.paused = false; Game.speed = float(k)
+
+var _info_t := 0.0
+func _refresh_info() -> void:
+	var world: World = get_parent()
+	var lines := []
+	var n := 0
+	for sg in world.segs:
+		if sg.dead or sg.parent >= 0 or sg.prog < 1.0: continue
+		n += 1
+		var worst := 0.0; var wet := 0.0; var rub := false; var faces := 0
+		for c in world.segs:
+			if c.dead or c.root_of(world.segs) != sg.id: continue
+			worst = maxf(worst, c.stress); wet = maxf(wet, c.water); rub = rub or c.rubble.size() > 0
+			if not c.done(): faces += 1
+		var g: float = world.hazards.gas_of(sg)
+		lines.append("[b]%s No.%d[/b]  CH4 %s%.1f%%[/color]  water %s%d%%[/color]  roof %s%s[/color]  faces %d" % [
+			"Shaft" if sg.is_shaft() else "Mine", n,
+			"[color=#ff8a73]" if g >= 1.5 else ("[color=#f2b705]" if g >= 0.8 else "[color=#9be07a]"), g,
+			"[color=#ff8a73]" if wet > 0.75 else ("[color=#f2b705]" if wet > 0.3 else "[color=#9be07a]"), int(wet * 100),
+			"[color=#ff8a73]" if (rub or worst > 0.7) else ("[color=#f2b705]" if worst > 0.4 else "[color=#9be07a]"), ("caved in" if rub else ("working" if worst > 0.7 else ("strained" if worst > 0.4 else "sound"))), faces])
+	if lines.is_empty(): lines.append("No mines open yet. Drag from the hillside into the ground.")
+	lines.append("")
+	for w in world.workers:
+		lines.append("%s  [color=#9a948a]%s · %s · %d%%[/color]" % [w.worker_name, Worker.ROLE_NAME[w.role], w.status(), int(w.energy)])
+	$Info.text = "\n".join(lines)
 
 func show_toast(text: String) -> void:
 	var l := Label.new()

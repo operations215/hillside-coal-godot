@@ -24,7 +24,8 @@ func tick(dt: float) -> void:
 		if rain > 0.0 and was == 0.0: Game.toast.emit("Rain is starting. Keep an eye on the water in shallow tunnels.")
 	for sg in world.segs:
 		if sg.dead or sg.prog < 4.0: continue
-		_roof(sg, dt); _water(sg, dt)
+		if not sg.is_shaft(): _roof(sg, dt)              # a timbered shaft does not fall in like a roof
+		_water(sg, dt)
 	_gas(dt)
 
 # ---------- roof ----------
@@ -65,7 +66,8 @@ func _water(sg: Segment, dt: float) -> void:
 	var inflow := 0.0
 	if sg.parent < 0: inflow += rain * 0.006                    # rain runs in at the portal
 	if depth > 60.0: inflow += 0.0006 + 0.0025 * clampf((depth - 60.0) / 300.0, 0.0, 1.0)   # groundwater seeps in below 60 ft
-	if sg.u.y > 0.05: inflow *= 1.0 + sg.u.y * 3.0                # a tunnel dipping away from the portal holds its water
+	if sg.is_shaft(): inflow *= 0.35                               # a shaft sump is bailed by the cage
+	elif sg.u.y > 0.05: inflow *= 1.0 + sg.u.y * 3.0              # a tunnel dipping away from the portal holds its water
 	else: inflow *= 0.25                                           # one rising toward daylight drains itself
 	var pump: float = 0.0015 + 0.004 * Game.up.get("pump", 0)
 	sg.water = clampf(sg.water + (inflow - pump) * dt, 0.0, 1.0)

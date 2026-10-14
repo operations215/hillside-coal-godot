@@ -46,6 +46,19 @@ func pos(s: float) -> Vector2:
 func floor_pos(s: float) -> Vector2:
 	return pos(s) + n * (R - 1.5)
 
+const SAVED := ["a", "b", "u", "n", "length", "prog", "carved", "parent", "pt", "dead", "belt", "coal_cells", "sup", "stress", "rubble", "water", "bp", "dh", "bt", "soft", "has_belt", "decom", "salvage", "pockets", "scanned"]
+
+func state() -> Dictionary:
+	var d := {}
+	for k in SAVED: d[k] = get(k)
+	return d
+
+func restore(d: Dictionary) -> void:
+	for k in SAVED:
+		if d.has(k): set(k, d[k])
+	crew = []; rig = -1
+	for pk in pockets: pk.crew = -1
+
 func is_shaft() -> bool:
 	return absf(u.x) < 0.2 and u.y > 0.8
 

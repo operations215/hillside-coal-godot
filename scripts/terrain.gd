@@ -101,6 +101,10 @@ func _mark_dirty(gx: int, gy: int) -> void:
 	var x := WX0 + gx * C; var y := WY0 + gy * C
 	_dirty[Vector2i(int(floor(float(x) / CH)), int(floor(float(y) / CH)))] = true
 
+func rebuild_all() -> void:
+	_dirty.clear()
+	for key in _chunks.keys(): _build_chunk(key)
+
 func _process(_dt: float) -> void:
 	# rebuild a few dirty chunks a frame so a long dig never stalls the game
 	var budget := 3

@@ -147,7 +147,9 @@ func _find_round() -> void:
 	state = State.WALK
 
 func _walk(dt: float) -> void:
-	var d := WALK_SPEED * dt * (0.7 if energy < 30.0 else 1.0)
+	var d := WALK_SPEED * dt * (0.7 if energy < 30.0 else 1.0) * (1.3 if seg < 0 else 1.0)
+	if seg < 0 and randf() < dt * 6.0:
+		world.fx.puff(position + Vector2(-4.0 * face_dir, 0.0), Vector2(-10.0 * face_dir + randf_range(-4, 4), randf_range(-6, -2)), 0.35, 0.9, Color(0.72, 0.62, 0.45, 0.5))
 	while d > 0.0 and not path.is_empty():
 		var wp: Array = path[0]
 		var target: Vector2 = world.waypoint_pos(wp)
@@ -294,7 +296,7 @@ func _draw() -> void:
 	var f := face_dir
 	var walking := state == State.WALK
 	var digging := state == State.DIG or (state == State.WORK and role == Role.BOLTER)
-	var q := anim * (9.0 if walking else 5.5)
+	var q := anim * ((11.0 if seg < 0 else 9.0) if walking else 5.5)
 	var bob := absf(sin(q)) * 0.5 if walking else 0.0
 	var hip := Vector2(0, -9.0 - bob)
 	var suit: Color = [Color("2a3f6b"), Color("4a3a2a"), Color("2f6b3a"), Color("4a4a55")][role]

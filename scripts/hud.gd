@@ -35,6 +35,13 @@ func _on_hand() -> void:
 	$Panel/Box/Hand.text = "Hand mining: drag along a tunnel" if world.hand_mode else "Hand mining orders"
 	if world.hand_mode: show_toast("Drag along a tunnel to mark its ribs for hand mining. Free miners dig out the coal the machine missed.")
 
+func _on_save() -> void:
+	get_parent().save_game()
+
+func _on_load() -> void:
+	var world: World = get_parent()
+	if not world.load_game(): show_toast("No save file yet.")
+
 func _on_car() -> void:
 	get_parent().buy_car()
 

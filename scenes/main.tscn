@@ -52,6 +52,14 @@ text = "1×"
 layout_mode = 2
 text = "2×"
 
+[node name="Save" type="Button" parent="HUD/Top"]
+layout_mode = 2
+text = "Save"
+
+[node name="Load" type="Button" parent="HUD/Top"]
+layout_mode = 2
+text = "Load"
+
 [node name="Sp3" type="Button" parent="HUD/Top"]
 layout_mode = 2
 text = "3×"
@@ -154,3 +162,5 @@ offset_bottom = 300.0
 [connection signal="pressed" from="HUD/Panel/Box/Car" to="HUD" method="_on_car"]
 [connection signal="pressed" from="HUD/Panel/Box/Scoop" to="HUD" method="_on_scoop"]
 [connection signal="pressed" from="HUD/Panel/Box/Hand" to="HUD" method="_on_hand"]
+[connection signal="pressed" from="HUD/Top/Save" to="HUD" method="_on_save"]
+[connection signal="pressed" from="HUD/Top/Load" to="HUD" method="_on_load"]

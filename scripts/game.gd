@@ -36,6 +36,14 @@ func buy(key: String) -> bool:
 	toast.emit("%s: %s." % [UPGRADES[key][tier][0], UPGRADES[key][tier][2]])
 	return true
 
+func state() -> Dictionary:
+	return {"money": money, "earned": earned, "time": time, "day": day, "price": price, "pile": pile, "piles": piles, "dug_ft": dug_ft, "day_earn": day_earn, "day_money": day_money, "up": up}
+
+func restore(d: Dictionary) -> void:
+	money = d.money; earned = d.earned; time = d.time; day = d.day; price = d.price; pile = d.pile; piles = d.piles
+	dug_ft = d.dug_ft; day_earn = d.day_earn; day_money = d.day_money; up = d.up
+	money_changed.emit()
+
 func reset() -> void:
 	money = START_MONEY; earned = 0.0; time = 0.0; day = 1; price = 85.0; speed = 1.0; paused = false
 	pile = 0.0; piles = {}; dug_ft = 0.0; day_earn = 0.0; day_money = START_MONEY; up = {"roof": 0, "pump": 0, "vent": 0}

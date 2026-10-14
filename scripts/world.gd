@@ -30,7 +30,8 @@ var night: Night
 var hand_mode := false            # dragging along a tunnel orders hand mining of its ribs
 var hand_drag := {}               # {seg, s0, s1}
 var brushed := 0                  # cells taken out of the ribs by hand, lifetime
-const PK_W := 8.0             # new tunnels get a conveyor, or go bare for shuttle cars
+const PK_W := 8.0
+const SAVE_PATH := "user://hillside.save"             # new tunnels get a conveyor, or go bare for shuttle cars
 var shake := 0.0
 var plan_wait := 0.0
 
@@ -44,13 +45,58 @@ func _ready() -> void:
 	hazards = Hazards.new(self)
 	var bd := Backdrop.new(); add_child(bd); move_child(bd, 0)
 	night = Night.new(); night.world = self; add_child(night)
-	for i in 2: hire(Worker.Role.MINER)
+	if OS.get_cmdline_user_args().has("--smoke") or OS.get_cmdline_user_args().has("--shot") or not load_game():
+		for i in 2: hire(Worker.Role.MINER)
 	Game.toast.connect(func(t): hud.show_toast(t))
+	Game.day_passed.connect(func(_d): if not OS.get_cmdline_user_args().has("--smoke") and not OS.get_cmdline_user_args().has("--shot"): save_game(true))
 	if OS.get_cmdline_user_args().has("--smoke"):
 		call_deferred("_smoke")
 	if OS.get_cmdline_user_args().has("--shot"):
 		call_deferred("_shot")
 	hud.show_toast("Drag from the hillside into the ground to start a tunnel. Coal rides the conveyor out to the stockpile and trucks haul it to market.")
+
+# ---------- the save file ----------
+func save_game(quiet := false) -> void:
+	var d := {
+		"version": 1, "game": Game.state(), "sold": sold_tons, "plan_belt": plan_belt,
+		"dug": terrain.gdug, "segs": segs.map(func(sg): return sg.state()),
+		"workers": workers.map(func(w): return {"role": w.role, "name": w.worker_name, "skill": w.skill, "wage": w.wage, "energy": w.energy, "pos": w.position}),
+		"rigs": rigs.map(func(r): return r.position), "cars": cars.map(func(c): return c.kind),
+		"items": items.filter(func(it): return it[0] >= 0 or true), "trucks": trucks,
+		"gas": hazards.gas, "rain": hazards.rain, "weather_t": hazards.weather_t,
+	}
+	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if f == null: hud.show_toast("Could not write the save file."); return
+	f.store_var(d, true); f.close()
+	if not quiet: hud.show_toast("Saved. The game also saves itself at the end of every shift.")
+
+func has_save() -> bool:
+	return FileAccess.file_exists(SAVE_PATH)
+
+func load_game() -> bool:
+	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if f == null: return false
+	var d = f.get_var(true); f.close()
+	if not (d is Dictionary) or not d.has("segs"): return false
+	for w in workers: w.queue_free()
+	for r in rigs: r.queue_free()
+	for c in cars: c.queue_free()
+	workers = []; rigs = []; cars = []; segs = []; items = []; trucks = []
+	Game.restore(d.game); sold_tons = d.sold; plan_belt = d.plan_belt
+	terrain.gdug = d.dug; terrain.rebuild_all()
+	for sd in d.segs:
+		var sg := Segment.new(); sg.id = segs.size(); sg.restore(sd); segs.append(sg)
+	for wd in d.workers:
+		var w := hire(wd.role)
+		w.worker_name = wd.name; w.skill = wd.skill; w.wage = wd.wage; w.energy = wd.energy; w.position = wd.pos
+	for rp in d.rigs:
+		var r := Rig.new(); r.id = rigs.size(); r.position = rp; rigs.append(r); add_child(r)
+	for ck in d.cars:
+		var c := Car.new(); c.id = cars.size(); c.world = self; c.kind = ck; c.position = Vector2(1100.0 + cars.size() * 40.0, 0.0); cars.append(c); add_child(c)
+	items = d.items; trucks = d.trucks
+	hazards.gas = d.gas; hazards.rain = d.rain; hazards.weather_t = d.weather_t
+	hud.show_toast("Loaded: day %d, %s in the bank." % [Game.day, Game.money_text(Game.money)])
+	return true
 
 # ---------- crew ----------
 func hire(role: int) -> Worker:
@@ -779,6 +825,11 @@ func _smoke() -> void:
 	print("RESULT %s prog=%d money=%d sold=%.1f coalcells=%d sup=%d stress=%.2f water=%.2f gas=%.2f rig=%d car=%s rock=%s" % [("OK" if ok else "FAIL"), int(sg.prog), int(Game.money), sold_tons, sg.coal_cells, int(sg.sup), sg.stress, sg.water, hazards.gas_of(sg), sg.rig, ("%s/%d/h%d prog=%d" % [cars[0].state, cars[0].cargo.size(), cars[0].hauled, int(sg3.prog)]) if sg3 else "none", ("%d/%d soft=%s bp=%d decom=%s belt=%.0f salv=%s" % [int(sg2.prog), int(sg2.length), sg2.soft, sg2.bp, sg2.decom, sg2.belt, sg2.salvage]) if sg2 else "none"])
 	if sg2 and sg2.belt > 1.0: ok = false; print("FAIL: belt not salvaged")
 	print("pockets=%d brushed=%d" % [sg.pockets.size(), brushed])
+	var before := segs.size(); var money_b := Game.money; var dug_b: int = terrain.gdug.count(1)
+	save_game(true)
+	if not load_game() or segs.size() != before or absf(Game.money - money_b) > 0.5 or terrain.gdug.count(1) != dug_b: ok = false; print("FAIL: save/load mismatch")
+	else: print("save/load ok: %d segs, %d dug cells" % [segs.size(), dug_b])
+	DirAccess.remove_absolute(SAVE_PATH)
 	if brushed < 5: ok = false; print("FAIL: ribs never brushed")
 	get_tree().quit(0 if ok else 1)
 
